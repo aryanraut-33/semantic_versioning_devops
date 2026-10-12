@@ -6,14 +6,13 @@ Sprint 1 files are prepared. Dependency installation, runtime verification, comm
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `app.py` | Application factory and three API endpoints |
-| `VERSION` | Application version, initially `1.0.0` |
-| `requirements.txt` | Flask dependency |
-| `API_CONTRACT.md` | Endpoint behavior and compatibility rules |
-| `.gitignore` | Excludes local environments, generated files, and credentials |
-| `PROJECT_PLAN.md` | Sprint plan and progress checklist |
+| File               | Purpose                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `app.py`           | Application factory and three API endpoints                   |
+| `VERSION`          | Application version, initially `1.0.0`                        |
+| `requirements.txt` | Flask dependency                                              |
+| `API_CONTRACT.md`  | Endpoint behavior and compatibility rules                     |
+| `.gitignore`       | Excludes local environments, generated files, and credentials |
 
 ## 1. Check or install tools on macOS
 
@@ -66,10 +65,10 @@ curl -i http://127.0.0.1:5001/version
 
 Each response should show HTTP `200` and `Content-Type: application/json`. Expected bodies, ignoring field order and whitespace:
 
-| Endpoint | Expected body |
-|---|---|
-| `/` | `{"message":"Release Governance API"}` |
-| `/health` | `{"status":"ok"}` |
+| Endpoint   | Expected body                                                       |
+| ---------- | ------------------------------------------------------------------- |
+| `/`        | `{"message":"Release Governance API"}`                              |
+| `/health`  | `{"status":"ok"}`                                                   |
 | `/version` | `{"version":"1.0.0","commit":"unknown"}` when `APP_COMMIT` is unset |
 
 These URLs also work in a browser. Stop the server with **Ctrl+C** in its terminal. This command uses Flask's local development server; the deployment server will be configured during Docker packaging.
@@ -153,12 +152,12 @@ Once these checks pass, update Sprint 1 in `PROJECT_PLAN.md`. Automated tests an
 
 ## Troubleshooting
 
-| Symptom | Next step |
-|---|---|
-| `No module named flask` | Activate `.venv` and install `requirements.txt` using that environment's `python` |
-| Port 5001 is already in use | Use `--port 5002` and change the request URLs to match |
-| `commit` is `unknown` | Make the initial commit, set `APP_COMMIT`, and restart the server |
-| Version or commit appears stale | Restart after updating the file or environment variable |
+| Symptom                                                                    | Next step                                                                                             |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `No module named flask`                                                    | Activate `.venv` and install `requirements.txt` using that environment's `python`                     |
+| Port 5001 is already in use                                                | Use `--port 5002` and change the request URLs to match                                                |
+| `commit` is `unknown`                                                      | Make the initial commit, set `APP_COMMIT`, and restart the server                                     |
+| Version or commit appears stale                                            | Restart after updating the file or environment variable                                               |
 | Python installer encounters certificate errors during package installation | Run the installer's `Install Certificates.command` from its Python folder in Applications, then retry |
 
 Flask setup is based on its [installation documentation](https://flask.palletsprojects.com/en/stable/installation/). The selected Flask version is listed in the official [release notes](https://flask.palletsprojects.com/en/stable/changes/#version-3-1-3).
