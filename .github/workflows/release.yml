@@ -1,0 +1,60 @@
+name: Release validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Authorize and validate release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require main branch
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release validation must be started from main."
+            exit 1
+          fi
+
+      - name: Check out selected commit and all release tags
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Authorize operator and validate release metadata
+        env:
+          RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
+        run: python scripts/validate_release.py --github
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Repeat tests for selected release commit
+        run: python -m pytest -q
+
+      - name: Record validation outcome
+        run: |
+          {
+            echo "### Release validation passed"
+            echo "Commit: $GITHUB_SHA"
+            echo "Operator: $GITHUB_ACTOR"
+            echo "Rerun operator: $GITHUB_TRIGGERING_ACTOR"
+            echo "Version policy and tests passed. Deployment is added in Sprint 5."
+          } >> "$GITHUB_STEP_SUMMARY"
