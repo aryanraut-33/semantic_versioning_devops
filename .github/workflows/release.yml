@@ -85,10 +85,13 @@ jobs:
           persist-credentials: false
           clean: true
 
-      - name: Set up Python on the Mac
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      - name: Use installed Python on the Mac
+        env:
+          MAC_PYTHON: ${{ vars.MAC_PYTHON || 'python3' }}
+        run: |
+          "$MAC_PYTHON" -c 'import sys; print(sys.executable); print(sys.version); sys.exit(0 if sys.version_info >= (3, 12) else "Python 3.12 or newer is required; configure MAC_PYTHON.")'
+          "$MAC_PYTHON" -m venv "$RUNNER_TEMP/release-venv"
+          echo "$RUNNER_TEMP/release-venv/bin" >> "$GITHUB_PATH"
 
       - name: Check Docker Desktop
         run: docker info
@@ -100,7 +103,6 @@ jobs:
 
       - name: Repeat tests on the Mac
         run: |
-          python -m venv "$RUNNER_TEMP/release-venv"
           "$RUNNER_TEMP/release-venv/bin/python" -m pip install -r requirements-dev.txt
           "$RUNNER_TEMP/release-venv/bin/python" -m pytest -q
 
