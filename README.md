@@ -1,16 +1,22 @@
 # Semantic Versioning and Audit-Focused Release Governance
 
-A small Flask API for demonstrating a controlled, traceable software release process. Follow [PROJECT_PLAN.md](PROJECT_PLAN.md) for sprint scope and progress.
+A small Flask arithmetic calculator for demonstrating a controlled, traceable software release process. The local `PROJECT_PLAN.md` records sprint scope and progress.
 
-Sprint 1 files are prepared. Dependency installation, runtime verification, committing, and GitHub publication must be performed by the developer. No terminal commands or application tests have been run by the assistant.
+Sprint 1 application files and Sprint 2 tests and Docker packaging are prepared. Follow [SPRINT_2.md](SPRINT_2.md) for the current setup, testing, container build, and verification steps. The assistant has not run terminal commands, tests, or a Docker build; execution results are pending your verification.
 
 ## Files
 
 | File               | Purpose                                                       |
 | ------------------ | ------------------------------------------------------------- |
-| `app.py`           | Application factory and three API endpoints                   |
+| `app.py`           | Calculator operations, input validation, health, and version  |
+| `templates/calculator.html` | Plain HTML calculator with four operation buttons    |
 | `VERSION`          | Application version, initially `1.0.0`                        |
-| `requirements.txt` | Flask dependency                                              |
+| `requirements.txt` | Flask and Gunicorn runtime dependencies                       |
+| `requirements-dev.txt` | Runtime dependencies plus pytest                          |
+| `pytest.ini`, `tests/` | Test configuration, fixtures, arithmetic and API tests     |
+| `Dockerfile`, `.dockerignore` | Container packaging and build context              |
+| `scripts/smoke_test.py` | HTTP verification of the packaged API                     |
+| `SPRINT_2.md` | Step-by-step testing and Docker guide                               |
 | `API_CONTRACT.md`  | Endpoint behavior and compatibility rules                     |
 | `.gitignore`       | Excludes local environments, generated files, and credentials |
 
@@ -32,7 +38,7 @@ If Git is missing, install Apple's command-line developer tools, finish the inst
 xcode-select --install
 ```
 
-macOS includes `curl`. Flask is installed inside the project's virtual environment in the next step. Docker and the deployment VM are introduced in later sprints.
+macOS includes `curl`. Runtime dependencies are installed inside the project's virtual environment in the next step. See `SPRINT_2.md` for Docker Desktop setup; the deployment VM comes in Sprint 5.
 
 ## 2. Create the Python environment
 
@@ -59,19 +65,31 @@ Leave this terminal running. Open another terminal and make requests:
 
 ```bash
 curl -i http://127.0.0.1:5001/
+curl -i "http://127.0.0.1:5001/add?a=8&b=2"
+curl -i "http://127.0.0.1:5001/subtract?a=8&b=2"
+curl -i "http://127.0.0.1:5001/multiply?a=8&b=2"
+curl -i "http://127.0.0.1:5001/divide?a=8&b=2"
 curl -i http://127.0.0.1:5001/health
 curl -i http://127.0.0.1:5001/version
 ```
 
-Each response should show HTTP `200` and `Content-Type: application/json`. Expected bodies, ignoring field order and whitespace:
+Open **http://127.0.0.1:5001/** in your browser to use the calculator. Enter A and B and click Add, Subtract, Multiply, or Divide. The page uses HTML form submissions with no JavaScript or CSS.
+
+The entrypoint returns HTML. Operation endpoints return JSON by default; the form includes `format=html` to display results on the page. All successful responses return HTTP `200`:
 
 | Endpoint   | Expected body                                                       |
 | ---------- | ------------------------------------------------------------------- |
-| `/`        | `{"message":"Release Governance API"}`                              |
+| `/`        | HTML calculator page                                                |
+| `/add?a=8&b=2` | `{"operation":"add","a":8.0,"b":2.0,"result":10.0}`             |
+| `/subtract?a=8&b=2` | Result `6.0` in the same JSON structure                     |
+| `/multiply?a=8&b=2` | Result `16.0` in the same JSON structure                    |
+| `/divide?a=8&b=2` | Result `4.0` in the same JSON structure                       |
 | `/health`  | `{"status":"ok"}`                                                   |
 | `/version` | `{"version":"1.0.0","commit":"unknown"}` when `APP_COMMIT` is unset |
 
-These URLs also work in a browser. Stop the server with **Ctrl+C** in its terminal. This command uses Flask's local development server; the deployment server will be configured during Docker packaging.
+These URLs also work in a browser. Stop the server with **Ctrl+C** in its terminal. This command uses Flask's local development server. The Docker image uses Gunicorn and is demonstrated on host port `5002` in `SPRINT_2.md`.
+
+Missing or invalid operands and division by zero return HTTP `400`. Negative values and decimals are supported; floating-point results may be approximate. See [API_CONTRACT.md](API_CONTRACT.md) for response details. No additional dependency is required for the calculator UI.
 
 ## 4. Commit the foundation and identify its source
 
@@ -91,7 +109,7 @@ git config user.email "YOUR_EMAIL"
 After the manual checks pass, stage the Sprint 1 files, review the staged changes, and commit:
 
 ```bash
-git add app.py VERSION requirements.txt .gitignore README.md API_CONTRACT.md PROJECT_PLAN.md
+git add app.py templates VERSION requirements.txt .gitignore README.md API_CONTRACT.md
 git diff --cached
 git commit -m "feat: add Flask API foundation"
 git branch -M main
@@ -143,12 +161,12 @@ After implementing and checking that sprint, commit the intended files, publish 
 ## Sprint 1 completion checklist
 
 - [ ] Python environment created and Flask installed.
-- [ ] All three endpoints return the documented responses.
+- [ ] The calculator page, four operations, and health/version endpoints return the documented responses.
 - [ ] Source committed and `/version` reports the matching commit ID.
 - [ ] Private GitHub repository published with the `main` branch.
 - [ ] API contract and branch/pull-request workflow reviewed.
 
-Once these checks pass, update Sprint 1 in `PROJECT_PLAN.md`. Automated tests and Docker packaging follow in Sprint 2.
+Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Continue with [Sprint 2: tests and Docker packaging](SPRINT_2.md).
 
 ## Troubleshooting
 
