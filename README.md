@@ -2,7 +2,7 @@
 
 A small Flask arithmetic calculator for demonstrating a controlled, traceable software release process. The local `PROJECT_PLAN.md` records sprint scope and progress.
 
-Sprints 2 and 3 are complete, as confirmed by the developer. Sprint 4 release validation and authorization are prepared; follow [SPRINT_4.md](SPRINT_4.md) for setup and verification. The assistant has not run terminal commands or triggered CI. The local `SPRINT_2.md` and `SPRINT_3.md` retain earlier setup instructions.
+The developer has confirmed successful Sprint 4 release validation. Sprint 5 deployment files now target the developer's Apple Silicon Mac with Docker Desktop; follow [SPRINT_5.md](SPRINT_5.md) to register the runner and deploy. The assistant has not run terminal commands, tests, or workflows. Earlier sprint guides retain historical setup instructions.
 
 ## Files
 
@@ -24,6 +24,8 @@ Sprints 2 and 3 are complete, as confirmed by the developer. Sprint 4 release va
 | `scripts/validate_release.py` | Version, release tag, changelog, and operator checks |
 | `.github/workflows/release.yml` | Manually triggered release validation on main |
 | `RELEASE_POLICY.md`, `SPRINT_4.md` | Release rules and setup instructions |
+| `scripts/deploy.py`, `tests/test_deployment.py` | Exact-image deployment, verification, and failure recovery tests |
+| `SPRINT_5.md` | Mac runner setup, Docker Desktop deployment, and browser demonstration |
 | `.gitignore`       | Excludes local environments, generated files, and credentials |
 
 ## 1. Check or install tools on macOS
@@ -44,7 +46,7 @@ If Git is missing, install Apple's command-line developer tools, finish the inst
 xcode-select --install
 ```
 
-macOS includes `curl`. Runtime dependencies are installed inside the project's virtual environment in the next step. See `SPRINT_2.md` for Docker Desktop setup; the deployment VM comes in Sprint 5.
+macOS includes `curl`. Runtime dependencies are installed inside the project's virtual environment in the next step. See `SPRINT_2.md` for Docker Desktop setup and `SPRINT_5.md` for deploying on this Mac.
 
 ## 2. Create the Python environment
 
@@ -167,7 +169,11 @@ After implementing and checking a sprint, commit the intended files, publish the
 
 The **CI** workflow runs on a GitHub-hosted Ubuntu 24.04 runner. Its **Test and verify container** job installs dependencies, runs pytest, builds the Docker image with the checked-out commit ID, and verifies the running calculator through `scripts/smoke_test.py`. Failures stop later ordinary steps. Container logs and cleanup are attempted even after a failure.
 
-The workflow uses Python 3.12 and the Docker engine on the hosted runner. Your Mac's Docker Desktop and port assignments do not affect it. The temporary CI container is removed after verification; deployment and release governance are later sprints.
+The workflow uses Python 3.12 and the Docker engine on the hosted runner. Your Mac's Docker Desktop and port assignments do not affect it. The temporary CI container is removed after verification.
+
+## Deployment
+
+The manually triggered **Release** workflow validates the selected `main` commit on a hosted runner, then builds and verifies the application on your Apple Silicon Mac using a self-hosted runner with labels `macOS`, `ARM64`, and `release-demo`. It tests a candidate container before deploying the same image ID as `release-governance-app` at **http://127.0.0.1:5004/**. After live HTTP verification, a hosted job creates the release tag and GitHub Release. Follow [SPRINT_5.md](SPRINT_5.md) for commands and failure recovery. Previous containers/images and `~/.local/state/semantic_versioning_devops/deployment.json` support recovery. The runner uses its own checkout, separate from your working folder. Keep Docker Desktop active and the Mac awake during deployment and demonstrations.
 
 ## Sprint 1 completion checklist
 
@@ -177,7 +183,7 @@ The workflow uses Python 3.12 and the Docker engine on the hosted runner. Your M
 - [ ] Private GitHub repository published with the `main` branch.
 - [ ] API contract and branch/pull-request workflow reviewed.
 
-Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Sprints 2 and 3 are complete; continue with [Sprint 4: release validation](SPRINT_4.md).
+Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Current development continues with [Sprint 5: deployment and verification](SPRINT_5.md).
 
 ## Troubleshooting
 
