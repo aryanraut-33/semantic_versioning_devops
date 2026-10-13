@@ -56,5 +56,5 @@ jobs:
             echo "Commit: $GITHUB_SHA"
             echo "Operator: $GITHUB_ACTOR"
             echo "Rerun operator: $GITHUB_TRIGGERING_ACTOR"
-            echo "Version policy and tests passed. Deployment is added in Sprint 5."
+            echo "Version policy and tests passed."
           } >> "$GITHUB_STEP_SUMMARY"
