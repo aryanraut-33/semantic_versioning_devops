@@ -2,7 +2,7 @@
 
 A small Flask arithmetic calculator for demonstrating a controlled, traceable software release process. The local `PROJECT_PLAN.md` records sprint scope and progress.
 
-Sprint 1 application files and Sprint 2 tests and Docker packaging are prepared. Follow [SPRINT_2.md](SPRINT_2.md) for the current setup, testing, container build, and verification steps. The assistant has not run terminal commands, tests, or a Docker build; execution results are pending your verification.
+Sprint 2 tests and Docker packaging are complete, as confirmed by the developer. The Sprint 3 CI workflow is prepared; follow [SPRINT_3.md](SPRINT_3.md) to publish it and verify GitHub runs. The assistant has not run terminal commands or triggered CI. The local `SPRINT_2.md` contains the manual testing and Docker instructions.
 
 ## Files
 
@@ -17,6 +17,8 @@ Sprint 1 application files and Sprint 2 tests and Docker packaging are prepared.
 | `Dockerfile`, `.dockerignore` | Container packaging and build context              |
 | `scripts/smoke_test.py` | HTTP verification of the packaged API                     |
 | `SPRINT_2.md` | Step-by-step testing and Docker guide                               |
+| `.github/workflows/ci.yml` | GitHub Actions tests, image build, and container verification |
+| `SPRINT_3.md` | GitHub setup and passing/failing CI demonstration guide             |
 | `API_CONTRACT.md`  | Endpoint behavior and compatibility rules                     |
 | `.gitignore`       | Excludes local environments, generated files, and credentials |
 
@@ -148,15 +150,20 @@ If the local repository is already connected to GitHub, use its existing reposit
 
 ## 6. Use a branch and pull request for subsequent work
 
-After the initial `main` branch is published, start the next sprint on a new branch, for example:
+With the completed Sprint 2 code checked out, start Sprint 3 on a new branch. Skip branch creation if you are already on `sprint-3-ci`:
 
 ```bash
-git switch main
-git pull --ff-only
-git switch -c sprint-2-tests-docker
+git status --short
+git switch -c sprint-3-ci
 ```
 
-After implementing and checking that sprint, commit the intended files, publish the branch, and open a pull request into `main`. Describe what changed and how it was verified. Review the diff and merge when the sprint's completion checks pass. GitHub Actions checks arrive in Sprint 3; they are not active yet.
+After implementing and checking a sprint, commit the intended files, publish the branch, and open a pull request into `main`. Describe what changed and how it was verified. Review the diff and merge when the sprint's completion checks pass. The Sprint 3 workflow runs on pull requests targeting `main` and updates to `main` once published; see `SPRINT_3.md` for setup.
+
+## Continuous integration
+
+The **CI** workflow runs on a GitHub-hosted Ubuntu 24.04 runner. Its **Test and verify container** job installs dependencies, runs pytest, builds the Docker image with the checked-out commit ID, and verifies the running calculator through `scripts/smoke_test.py`. Failures stop later ordinary steps. Container logs and cleanup are attempted even after a failure.
+
+The workflow uses Python 3.12 and the Docker engine on the hosted runner. Your Mac's Docker Desktop and port assignments do not affect it. The temporary CI container is removed after verification; deployment and release governance are later sprints.
 
 ## Sprint 1 completion checklist
 
@@ -166,7 +173,7 @@ After implementing and checking that sprint, commit the intended files, publish 
 - [ ] Private GitHub repository published with the `main` branch.
 - [ ] API contract and branch/pull-request workflow reviewed.
 
-Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Continue with [Sprint 2: tests and Docker packaging](SPRINT_2.md).
+Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Sprint 2 is complete; continue with [Sprint 3: continuous integration](SPRINT_3.md).
 
 ## Troubleshooting
 
