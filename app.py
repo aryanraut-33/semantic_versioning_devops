@@ -9,7 +9,7 @@ from flask import Flask, jsonify, render_template, request
 
 
 OPERATIONS = {
-    "add": (operator.add, "+"),
+    "add": (operator.sub, "+"),
     "subtract": (operator.sub, "-"),
     "multiply": (operator.mul, "×"),
     "divide": (operator.truediv, "÷"),
