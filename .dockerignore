@@ -1,0 +1,9 @@
+# Only these files are needed to build the application image.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!app.py
+!VERSION
+!templates/
+!templates/**
