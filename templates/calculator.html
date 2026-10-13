@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Arithmetic Calculator</title>
+</head>
+<body>
+    <main>
+        <h1>Arithmetic Calculator</h1>
+        <p>Hi, I am Aryan...This is my DEVOPS project</p>
+        <p>Enter two numbers and choose an operation. Subtraction and division use A first, then B.</p>
+
+        <form action="{{ url_for('add') }}" method="get">
+            <input type="hidden" name="format" value="html">
+            <p>
+                <label for="a">Number A</label>
+                <input id="a" name="a" type="number" step="any" value="{{ a }}" required>
+            </p>
+            <p>
+                <label for="b">Number B</label>
+                <input id="b" name="b" type="number" step="any" value="{{ b }}" required>
+            </p>
+            <button type="submit" formaction="{{ url_for('add') }}">Add</button>
+            <button type="submit" formaction="{{ url_for('subtract') }}">Subtract</button>
+            <button type="submit" formaction="{{ url_for('multiply') }}">Multiply</button>
+            <button type="submit" formaction="{{ url_for('divide') }}">Divide</button>
+        </form>
+
+        {% if error %}
+        <p role="alert">{{ error }}</p>
+        {% elif result is not none %}
+        <p>{{ a }} {{ symbol }} {{ b }} = <output id="result">{{ result }}</output></p>
+        {% endif %}
+
+        <p><a href="{{ url_for('index') }}">Clear calculator</a></p>
+        <p>Uses floating-point arithmetic; some decimal results may be approximate.</p>
+    </main>
+    <footer>
+        <a href="{{ url_for('health') }}">Health</a>
+        <a href="{{ url_for('version') }}">Version</a>
+    </footer>
+</body>
+</html>
