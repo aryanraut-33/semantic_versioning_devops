@@ -2,7 +2,7 @@
 
 A small Flask arithmetic calculator for demonstrating a controlled, traceable software release process. The local `PROJECT_PLAN.md` records sprint scope and progress.
 
-Sprint 2 tests and Docker packaging are complete, as confirmed by the developer. The Sprint 3 CI workflow is prepared; follow [SPRINT_3.md](SPRINT_3.md) to publish it and verify GitHub runs. The assistant has not run terminal commands or triggered CI. The local `SPRINT_2.md` contains the manual testing and Docker instructions.
+Sprints 2 and 3 are complete, as confirmed by the developer. Sprint 4 release validation and authorization are prepared; follow [SPRINT_4.md](SPRINT_4.md) for setup and verification. The assistant has not run terminal commands or triggered CI. The local `SPRINT_2.md` and `SPRINT_3.md` retain earlier setup instructions.
 
 ## Files
 
@@ -20,6 +20,10 @@ Sprint 2 tests and Docker packaging are complete, as confirmed by the developer.
 | `.github/workflows/ci.yml` | GitHub Actions tests, image build, and container verification |
 | `SPRINT_3.md` | GitHub setup and passing/failing CI demonstration guide             |
 | `API_CONTRACT.md`  | Endpoint behavior and compatibility rules                     |
+| `release.json`, `CHANGELOG.md` | Declared change type and version-specific changes |
+| `scripts/validate_release.py` | Version, release tag, changelog, and operator checks |
+| `.github/workflows/release.yml` | Manually triggered release validation on main |
+| `RELEASE_POLICY.md`, `SPRINT_4.md` | Release rules and setup instructions |
 | `.gitignore`       | Excludes local environments, generated files, and credentials |
 
 ## 1. Check or install tools on macOS
@@ -173,7 +177,7 @@ The workflow uses Python 3.12 and the Docker engine on the hosted runner. Your M
 - [ ] Private GitHub repository published with the `main` branch.
 - [ ] API contract and branch/pull-request workflow reviewed.
 
-Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Sprint 2 is complete; continue with [Sprint 3: continuous integration](SPRINT_3.md).
+Once these checks pass, update Sprint 1 in the local `PROJECT_PLAN.md`. Sprints 2 and 3 are complete; continue with [Sprint 4: release validation](SPRINT_4.md).
 
 ## Troubleshooting
 
