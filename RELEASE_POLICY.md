@@ -21,13 +21,15 @@ Reserve Git tags named `vMAJOR.MINOR.PATCH` for successfully deployed releases. 
 
 This is a single forward release sequence: no parallel maintenance branches. Rolling back deployment later will not decrease the version baseline or delete release history.
 
-Sprint 4 reads tags but does not create them. Sprint 5 will create a successful release tag only after deployment verification. Do not manually create demonstration release tags in the real repository: tests use simulated tag lists. A tag is trusted evidence under this project's convention, not independent proof that deployment occurred.
+The release workflow creates a successful release tag only after deployment verification, then publishes its GitHub Release. Do not manually create demonstration release tags in the real repository: tests use simulated tag lists. A tag is trusted evidence under this project's convention, not independent proof that deployment occurred.
 
 ## Authorization and commit selection
 
-The `Release validation` workflow accepts manual dispatches from `main`. The `RELEASE_OPERATOR` repository variable contains one GitHub login, without `@`. Both the original actor and the actor requesting a rerun must match it. An unset variable fails closed.
+The `Release` workflow (named `Release validation` in Sprint 4) accepts manual dispatches from `main`. The `RELEASE_OPERATOR` repository variable contains one GitHub login, without `@`. Both the original actor and the actor requesting a rerun must match it. An unset variable fails closed.
 
-The workflow checks out the full commit SHA selected when the run was dispatched, fetches full history and tags, validates metadata, and repeats pytest for that commit. A later push to `main` does not change the selected source. Validation success means the candidate passed these checks; it is not a deployment or a durable release approval. Deployment must revalidate it in Sprint 5.
+The workflow checks out the full commit SHA selected when the run was dispatched, fetches full history and tags, validates metadata, and repeats pytest for that commit. A later push to `main` does not change the selected source. The Mac deployment runner revalidates metadata and authorization, repeats tests, builds one image using Docker Desktop, tests a temporary container, and deploys that image ID. Live HTTP checks verify the version, commit, and calculator behavior before publication.
+
+Release runs share a concurrency group, and a file lock in the runner user's state directory prevents simultaneous replacement scripts. The deployment binds to Mac loopback port 5004 and retains the previous stopped container and image. Handled verification failures attempt restoration and still fail the release. Hard interruption requires manual inspection. Publishing uses a hosted job with write permission and requires deployment evidence from the same run attempt. See `SPRINT_5.md` for partial-publication recovery; deployment and GitHub publication are not an atomic transaction.
 
 Repository administrators and contributors who can modify trusted workflow code or configuration remain part of the trust boundary. This is an educational policy gate, not protection against a malicious repository administrator. GitHub permissions govern who can request a workflow run; this application policy further limits which requests proceed.
 

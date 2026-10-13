@@ -1,4 +1,4 @@
-name: Release validation
+name: Release
 
 on:
   workflow_dispatch:
@@ -58,3 +58,116 @@ jobs:
             echo "Rerun operator: $GITHUB_TRIGGERING_ACTOR"
             echo "Version policy and tests passed."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Build, test, deploy and verify
+    needs: validate
+    runs-on: [self-hosted, macOS, ARM64, release-demo]
+    env:
+      DOCKER_CONTEXT: desktop-linux
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.deploy.outputs.version }}
+      commit: ${{ steps.deploy.outputs.commit }}
+      image_id: ${{ steps.deploy.outputs.image_id }}
+      attempt: ${{ steps.deploy.outputs.attempt }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the same selected commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python on the Mac
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check Docker Desktop
+        run: docker info
+
+      - name: Revalidate release on the Mac
+        env:
+          RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
+        run: python scripts/validate_release.py --github
+
+      - name: Repeat tests on the Mac
+        run: |
+          python -m venv "$RUNNER_TEMP/release-venv"
+          "$RUNNER_TEMP/release-venv/bin/python" -m pip install -r requirements-dev.txt
+          "$RUNNER_TEMP/release-venv/bin/python" -m pytest -q
+
+      - name: Build, smoke-test and deploy exact image
+        id: deploy
+        env:
+          RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
+        run: python scripts/deploy.py
+
+  publish:
+    name: Record verified release
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Create tag and GitHub release after deployment verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.deploy.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.deploy.outputs.commit }}
+          RELEASE_IMAGE: ${{ needs.deploy.outputs.image_id }}
+          DEPLOY_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
+          RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
+        shell: bash
+        run: |
+          if [[ -z "$RELEASE_OPERATOR" || "${GITHUB_ACTOR,,}" != "${RELEASE_OPERATOR,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${RELEASE_OPERATOR,,}" ]]; then
+            echo "Release publication requires the authorized operator."
+            exit 1
+          fi
+          if [[ "$DEPLOY_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]]; then
+            echo "Deployment evidence is from an earlier attempt. Inspect deployment and tag state before recovery; see SPRINT_5.md."
+            exit 1
+          fi
+          tag="v$RELEASE_VERSION"
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" > "$RUNNER_TEMP/existing-tag.json" 2> "$RUNNER_TEMP/tag-error.txt"; then
+            actual_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["object"]["sha"])' "$RUNNER_TEMP/existing-tag.json")"
+            if [[ "$actual_commit" != "$RELEASE_COMMIT" ]]; then
+              echo "Existing tag does not point directly to the verified commit. Inspect before retrying."
+              exit 1
+            fi
+          else
+            if ! grep -q 'HTTP 404' "$RUNNER_TEMP/tag-error.txt"; then
+              cat "$RUNNER_TEMP/tag-error.txt"
+              exit 1
+            fi
+            gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f "ref=refs/tags/$tag" -f "sha=$RELEASE_COMMIT"
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          body = (
+              f"Verified deployment of {os.environ['RELEASE_VERSION']}.\n\n"
+              f"Commit: {os.environ['RELEASE_COMMIT']}\n\n"
+              f"Docker image ID on deployment Mac: {os.environ['RELEASE_IMAGE']}\n\n"
+              f"Workflow: {os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+              f"/actions/runs/{os.environ['GITHUB_RUN_ID']}\n"
+          )
+          Path(os.environ['RUNNER_TEMP'], 'release-notes.md').write_text(body)
+          PY
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release already exists at the verified tag."
+          else
+            gh release create "$tag" --verify-tag --title "$tag" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          echo "Verified release: $tag ($RELEASE_COMMIT)" >> "$GITHUB_STEP_SUMMARY"
