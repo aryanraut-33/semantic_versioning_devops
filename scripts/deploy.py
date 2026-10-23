@@ -102,7 +102,9 @@ def deploy():
     # CLI is intended only for the authorized workflow on the Mac runner.
     subprocess.run([sys.executable, str(ROOT / "scripts/validate_release.py"), "--github"], check=True)
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    commit = os.environ["GITHUB_SHA"]
+    # The validator has checked this checkout against the triggering CI head SHA.
+    # GITHUB_SHA on workflow_run describes the default branch, not necessarily CI's commit.
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     attempt = f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     candidate = f"release-api-candidate-{attempt}"
     image_tag = f"release-governance-api:{version}-{commit[:12]}-{attempt}"

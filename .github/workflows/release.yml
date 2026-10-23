@@ -2,9 +2,17 @@ name: Release
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
+
+env:
+  # workflow_run's github.sha can be newer than the commit that passed CI.
+  RELEASE_COMMIT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 concurrency:
   group: release-main
@@ -13,13 +21,23 @@ concurrency:
 jobs:
   validate:
     name: Authorize and validate release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
     defaults:
       run:
         shell: bash
     steps:
-      - name: Require main branch
+      - name: Require main branch for manual releases
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
             echo "Release validation must be started from main."
@@ -29,7 +47,7 @@ jobs:
       - name: Check out selected commit and all release tags
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.RELEASE_COMMIT }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -39,9 +57,12 @@ jobs:
           python-version: "3.12"
 
       - name: Authorize operator and validate release metadata
+        id: release
         env:
           RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
-        run: python scripts/validate_release.py --github
+        run: |
+          python scripts/validate_release.py --github
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.txt
@@ -53,7 +74,8 @@ jobs:
         run: |
           {
             echo "### Release validation passed"
-            echo "Commit: $GITHUB_SHA"
+            echo "Commit: $RELEASE_COMMIT"
+            echo "Trigger: $GITHUB_EVENT_NAME"
             echo "Operator: $GITHUB_ACTOR"
             echo "Rerun operator: $GITHUB_TRIGGERING_ACTOR"
             echo "Version policy and tests passed."
@@ -80,7 +102,7 @@ jobs:
       - name: Check out the same selected commit
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
           clean: true
@@ -129,6 +151,7 @@ jobs:
           RELEASE_IMAGE: ${{ needs.deploy.outputs.image_id }}
           DEPLOY_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
           RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
+          CI_RUN_URL: ${{ github.event.workflow_run.html_url }}
         shell: bash
         run: |
           if [[ -z "$RELEASE_OPERATOR" || "${GITHUB_ACTOR,,}" != "${RELEASE_OPERATOR,,}" || "${GITHUB_TRIGGERING_ACTOR,,}" != "${RELEASE_OPERATOR,,}" ]]; then
@@ -164,6 +187,8 @@ jobs:
               f"Workflow: {os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
               f"/actions/runs/{os.environ['GITHUB_RUN_ID']}\n"
           )
+          if os.environ.get('CI_RUN_URL'):
+              body += f"\nCI: {os.environ['CI_RUN_URL']}\n"
           Path(os.environ['RUNNER_TEMP'], 'release-notes.md').write_text(body)
           PY
           if gh release view "$tag" > /dev/null 2>&1; then

@@ -22,7 +22,7 @@ The developer has confirmed successful Sprint 4 release validation. Sprint 5 dep
 | `API_CONTRACT.md`  | Endpoint behavior and compatibility rules                     |
 | `release.json`, `CHANGELOG.md` | Declared change type and version-specific changes |
 | `scripts/validate_release.py` | Version, release tag, changelog, and operator checks |
-| `.github/workflows/release.yml` | Manually triggered release validation on main |
+| `.github/workflows/release.yml` | Automatic release after successful main push CI, with manual fallback |
 | `RELEASE_POLICY.md`, `SPRINT_4.md` | Release rules and setup instructions |
 | `scripts/deploy.py`, `tests/test_deployment.py` | Exact-image deployment, verification, and failure recovery tests |
 | `SPRINT_5.md` | Mac runner setup, Docker Desktop deployment, and browser demonstration |
@@ -173,7 +173,9 @@ The workflow uses Python 3.12 and the Docker engine on the hosted runner. Your M
 
 ## Deployment
 
-The manually triggered **Release** workflow validates the selected `main` commit on a hosted runner, then builds and verifies the application on your Apple Silicon Mac using a self-hosted runner with labels `macOS`, `ARM64`, and `release-demo`. It tests a candidate container before deploying the same image ID as `release-governance-app` at **http://127.0.0.1:5004/**. After live HTTP verification, a hosted job creates the release tag and GitHub Release. Follow [SPRINT_5.md](SPRINT_5.md) for commands and failure recovery. Previous containers/images and `~/.local/state/semantic_versioning_devops/deployment.json` support recovery. The runner uses its own checkout, separate from your working folder. Keep Docker Desktop active and the Mac awake during deployment and demonstrations.
+The **Release** workflow starts automatically after **CI succeeds for a push to `main`**, including a merged pull request. It validates the exact commit that passed CI on a hosted runner, then builds and verifies the application on your Apple Silicon Mac using a self-hosted runner with labels `macOS`, `ARM64`, and `release-demo`. It tests a candidate container before deploying the same image ID as `release-governance-app` at **http://127.0.0.1:5004/**. After live HTTP verification, a hosted job creates the release tag and GitHub Release, including a link to the triggering CI run. Follow [SPRINT_5.md](SPRINT_5.md) for commands and failure recovery. Previous containers/images and `~/.local/state/semantic_versioning_devops/deployment.json` support recovery. The runner uses its own checkout, separate from your working folder. Keep Docker Desktop active and the Mac awake during deployment and demonstrations.
+
+For the demonstration, the flow is **commit → push/open PR → CI → merge → main CI → automatic Release → GitHub Release**. Merge the automation changes into `main` to enable this behavior. PR checks and failed CI runs do not deploy. The `RELEASE_OPERATOR` checks still apply to the push/merge actor and rerun actors. You still edit `VERSION`, `release.json`, and `CHANGELOG.md`; already-released or incorrect versions fail release validation before deployment. Complete one release before merging the next demo version. **Actions → Release → Run workflow → main** remains available as a manual fallback and independently repeats validation/tests. See [RELEASE_POLICY.md](RELEASE_POLICY.md) for the full trigger and authorization rules.
 
 ## Sprint 1 completion checklist
 

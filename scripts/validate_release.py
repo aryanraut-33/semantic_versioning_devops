@@ -22,14 +22,63 @@ def parse_version(value):
     return tuple(int(part) for part in value.split("."))
 
 
-def authorize(event, ref, actor, triggering_actor, operator):
-    if event != "workflow_dispatch" or ref != "refs/heads/main":
-        raise ReleaseError("Releases require a manual workflow dispatch from main.")
+def authorize(event, ref, actor, triggering_actor, operator, *, workflow_run=None, repository=""):
+    source_actors = []
+    if event == "workflow_run":
+        run = workflow_run if isinstance(workflow_run, dict) else {}
+        source_repository = run.get("head_repository") or {}
+        if (
+            run.get("name") != "CI"
+            or run.get("path") != ".github/workflows/ci.yml"
+            or run.get("event") != "push"
+            or run.get("status") != "completed"
+            or run.get("conclusion") != "success"
+            or run.get("head_branch") != "main"
+            or not repository
+            or not isinstance(source_repository, dict)
+            or source_repository.get("full_name") != repository
+        ):
+            raise ReleaseError("Automatic releases require successful push CI on main in this repository.")
+        for field in ("actor", "triggering_actor"):
+            identity = run.get(field)
+            source_actors.append(identity.get("login", "") if isinstance(identity, dict) else "")
+    elif event != "workflow_dispatch" or ref != "refs/heads/main":
+        raise ReleaseError("Releases require manual dispatch from main or successful push CI on main.")
     operator = operator.strip().casefold()
     if not operator:
         raise ReleaseError("Configure the RELEASE_OPERATOR repository variable first.")
     if actor.casefold() != operator or triggering_actor.casefold() != operator:
         raise ReleaseError("Both the original operator and the rerun operator must be authorized.")
+    if any(not isinstance(login, str) or login.casefold() != operator for login in source_actors):
+        raise ReleaseError("Both the CI operator and the CI rerun operator must be authorized.")
+
+
+def github_release_commit(environ=None):
+    """Authorize GitHub context and select the exact source commit for this release."""
+    environ = os.environ if environ is None else environ
+    event = environ.get("GITHUB_EVENT_NAME", "")
+    run = None
+    if event == "workflow_run":
+        event_path = environ.get("GITHUB_EVENT_PATH")
+        if not event_path:
+            raise ReleaseError("GitHub workflow_run event payload is required.")
+        payload = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("action") != "completed":
+            raise ReleaseError("A completed workflow_run event is required.")
+        run = payload.get("workflow_run")
+    authorize(
+        event,
+        environ.get("GITHUB_REF", ""),
+        environ.get("GITHUB_ACTOR", ""),
+        environ.get("GITHUB_TRIGGERING_ACTOR", ""),
+        environ.get("RELEASE_OPERATOR", ""),
+        workflow_run=run,
+        repository=environ.get("GITHUB_REPOSITORY", ""),
+    )
+    commit = run.get("head_sha") if event == "workflow_run" else environ.get("GITHUB_SHA", "")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ReleaseError("Release source must be a full Git commit SHA.")
+    return commit
 
 
 def release_versions(tags):
@@ -105,16 +154,9 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     try:
-        if args.github:
-            authorize(
-                os.environ.get("GITHUB_EVENT_NAME", ""),
-                os.environ.get("GITHUB_REF", ""),
-                os.environ.get("GITHUB_ACTOR", ""),
-                os.environ.get("GITHUB_TRIGGERING_ACTOR", ""),
-                os.environ.get("RELEASE_OPERATOR", ""),
-            )
+        selected_commit = github_release_commit() if args.github else None
         commit = git(root, "rev-parse", "HEAD")
-        if args.github and commit != os.environ.get("GITHUB_SHA"):
+        if args.github and commit != selected_commit:
             raise ReleaseError("Checked-out commit does not match the workflow's selected commit.")
         if git(root, "rev-parse", "--is-shallow-repository") != "false":
             raise ReleaseError("Full Git history and release tags are required.")

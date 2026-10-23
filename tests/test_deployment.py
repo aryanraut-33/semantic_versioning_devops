@@ -101,6 +101,7 @@ def test_failed_candidate_never_replaces_live_container(monkeypatch, tmp_path):
     for key, value in {"GITHUB_SHA": "abc", "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(deploy.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(deploy.subprocess, "check_output", lambda *a, **k: "abc\n")
     monkeypatch.setattr(deploy, "show_logs", lambda name: None)
     calls = []
     monkeypatch.setattr(deploy, "docker", lambda *a: calls.append(a) or "sha256:new")
@@ -131,3 +132,39 @@ def test_failed_container_start_restores_previous(engine, tmp_path, monkeypatch)
         deploy.promote("sha256:new", "1.0.1", "new", "2-1", tmp_path / "state.json")
     assert containers[deploy.LIVE]["Image"] == "sha256:old"
     assert containers[deploy.LIVE]["State"]["Running"]
+
+
+def test_deployment_uses_validated_checkout_instead_of_workflow_sha(monkeypatch, tmp_path):
+    commit = "a" * 40
+    (tmp_path / "VERSION").write_text("1.0.1\n")
+    output = tmp_path / "outputs"
+    monkeypatch.setattr(deploy, "ROOT", tmp_path)
+    for key, value in {
+        "GITHUB_SHA": "b" * 40,
+        "GITHUB_RUN_ID": "2",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_OUTPUT": str(output),
+    }.items():
+        monkeypatch.setenv(key, value)
+    validation_calls = []
+    monkeypatch.setattr(deploy.subprocess, "run", lambda *a, **k: validation_calls.append(a))
+    monkeypatch.setattr(deploy.subprocess, "check_output", lambda *a, **k: commit + "\n")
+    docker_calls = []
+    monkeypatch.setattr(deploy, "docker", lambda *a: docker_calls.append(a) or "sha256:tested")
+    monkeypatch.setattr(deploy, "start", lambda *a, **k: None)
+    monkeypatch.setattr(deploy, "show_logs", lambda *a: None)
+    monkeypatch.setattr(deploy, "inspect_container", lambda *a: {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "49152"}]}}})
+    smoke_calls = []
+    monkeypatch.setattr(deploy, "smoke", lambda *a: smoke_calls.append(a))
+    promotions = []
+    monkeypatch.setattr(deploy, "promote", lambda *a: promotions.append(a) or {})
+
+    deploy.deploy()
+
+    assert validation_calls[0][0][-1] == "--github"
+    build = next(call for call in docker_calls if call[0] == "build")
+    assert f"APP_COMMIT={commit}" in build
+    assert smoke_calls == [("49152", "1.0.1", commit)]
+    assert promotions == [("sha256:tested", "1.0.1", commit, "2-1")]
+    assert f"commit={commit}\n" in output.read_text()
