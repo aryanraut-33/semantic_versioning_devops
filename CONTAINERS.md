@@ -2,7 +2,7 @@
 
 Each stack runs **two containers**: frontend (Nginx serving React) and backend (Gunicorn running Flask). Node builds React but is not a running service.
 
-Browser → localhost:5005 → frontend:80 → backend:8000
+Browser → localhost:5006 → frontend:80 → backend:8000
 
 Only frontend publishes a host port. API requests stay on the same browser origin and are proxied across Docker's network. No CORS setup is needed. This is a reverse proxy with one backend, not load balancing or autoscaling.
 
@@ -23,15 +23,15 @@ APP_COMMIT=local-demo docker compose --project-name calfit-local up --detach --n
 docker compose --project-name calfit-local ps
 ```
 
-Open **http://127.0.0.1:5005/**. Expect frontend and backend to be running and healthy. Compose waits for backend health before starting frontend. Use APP_PORT=5006 with the up command if 5005 is occupied.
+Open **http://127.0.0.1:5006/**. Expect frontend and backend to be running and healthy. Compose waits for backend health before starting frontend. Use APP_PORT=5006 with the up command if 5006 is occupied.
 
 ```bash
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-python scripts/smoke_test.py --base-url http://127.0.0.1:5005 --expected-version "$(cat VERSION)" --expected-commit local-demo
-curl http://127.0.0.1:5005/frontend-version.json
-curl http://127.0.0.1:5005/version
+python scripts/smoke_test.py --base-url http://127.0.0.1:5006 --expected-version "$(cat VERSION)" --expected-commit local-demo
+curl http://127.0.0.1:5006/frontend-version.json
+curl http://127.0.0.1:5006/version
 docker compose --project-name calfit-local logs --tail 100 frontend backend
 ```
 
@@ -71,7 +71,7 @@ During candidate verification there may be **four** running containers: two live
 
 ## One-time migration
 
-If `release-governance-app` still runs, the release script refuses to replace live services until you migrate. First verify the new local stack on port 5005. Inspect the old container, then stop it without deleting it:
+If `release-governance-app` still runs, the release script refuses to replace live services until you migrate. First verify the new local stack on port 5006. Inspect the old container, then stop it without deleting it:
 
 ```bash
 docker ps --all --filter name=release-governance-app
