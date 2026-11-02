@@ -15,7 +15,7 @@ APP_COMMIT=local-demo docker compose --project-name calfit-local build
 APP_COMMIT=local-demo docker compose --project-name calfit-local up --detach --no-build --wait --wait-timeout 90
 ```
 
-Open **http://127.0.0.1:5005/**. Docker Desktop must be running and frontend/package-lock.json must exist (generate with `npm --prefix frontend install` and commit it). No commands, builds, or tests have been run by the assistant.
+Open **http://127.0.0.1:5006/**. Docker Desktop must be running and frontend/package-lock.json must exist (generate with `npm --prefix frontend install` and commit it). No commands, builds, or tests have been run by the assistant.
 
 | Component | Files |
 |---|---|
@@ -46,7 +46,7 @@ Nginx serves page routes; Flask serves JSON APIs. Results are only held in React
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-python scripts/smoke_test.py --base-url http://127.0.0.1:5005 --expected-version "$(cat VERSION)" --expected-commit local-demo
+python scripts/smoke_test.py --base-url http://127.0.0.1:5006 --expected-version "$(cat VERSION)" --expected-commit local-demo
 ```
 
 Reference case: male coefficient, age 30, 80 kg, 180 cm, moderate activity → **1,780 resting kcal/day**, **2,759 maintenance kcal/day**, **BMI 24.69 / Healthy weight**. Test browser navigation, unit switching, and mobile layout manually too.

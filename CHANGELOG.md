@@ -1,5 +1,7 @@
 # Changelog
 
+## [2.0.1]
+- Update default local Compose port to 5006 to prevent local port conflicts.
 ## [2.0.0]
 
 - Split React/Nginx and Flask/Gunicorn into separate containers; update CI, paired-image deployment/recovery, and release evidence.

@@ -1,6 +1,6 @@
 # Fitness API Contract — 2.0.0
 
-Local container URL: `http://127.0.0.1:5005`. Release deployment: `http://127.0.0.1:5004`. In development Vite serves pages on 5173 and Flask serves APIs on 5001. JSON field order is not significant. No authentication is required for calculator endpoints. Release authorization is a separate pipeline concern.
+Local container URL: `http://127.0.0.1:5006`. Release deployment: `http://127.0.0.1:5004`. In development Vite serves pages on 5173 and Flask serves APIs on 5001. JSON field order is not significant. No authentication is required for calculator endpoints. Release authorization is a separate pipeline concern.
 
 ## Routes
 
