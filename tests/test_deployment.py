@@ -1,170 +1,176 @@
-"""Exercise replacement failures with a fake Docker engine; no containers are started."""
+"""Test pair promotion and recovery without running Docker."""
 
 import json
-
 import pytest
 
 from scripts import deploy
 
+IMAGES = {"frontend": "sha256:front-new", "backend": "sha256:back-new"}
+
 
 @pytest.fixture
 def engine(monkeypatch):
-    containers = {}
     events = []
-
-    def start(name, image, port, version, commit, restart="no"):
-        events.append(("start-new", image))
-        containers[name] = {"Image": image, "State": {"Running": True}, "Config": {"Labels": {
-            deploy.LABEL: "true", "release-governance.version": version,
-            "release-governance.commit": commit}}}
-
-    def docker(*args):
-        events.append(args)
-        if args[0] == "rename":
-            containers[args[2]] = containers.pop(args[1])
-        elif args[0] in ("start", "stop"):
-            containers[args[1]]["State"]["Running"] = args[0] == "start"
-        elif args[0] == "rm":
-            containers.pop(args[-1])
-        return ""
-
-    monkeypatch.setattr(deploy, "docker", docker)
-    monkeypatch.setattr(deploy, "inspect_container", containers.get)
-    monkeypatch.setattr(deploy, "start", start)
-    monkeypatch.setattr(deploy, "smoke", lambda *args: None)
-    monkeypatch.setattr(deploy, "show_logs", lambda name: None)
-    return containers, events, start
+    monkeypatch.setattr(deploy, "docker", lambda *a, **k: "")
+    monkeypatch.setattr(deploy, "up", lambda file, project: events.append(("up", str(file))))
+    monkeypatch.setattr(deploy, "down", lambda file, project: events.append(("down", str(file))))
+    monkeypatch.setattr(deploy, "logs", lambda *a: None)
+    monkeypatch.setattr(deploy, "smoke", lambda *a: events.append(("smoke", a[2])))
+    monkeypatch.setattr(deploy, "verify_images", lambda *a: events.append(("verify", a[2])))
+    return events
 
 
-def test_initial_deployment_records_exact_image(engine, tmp_path):
-    containers, _, _ = engine
-    state = tmp_path / "deployment.json"
-    result = deploy.promote("sha256:new", "1.0.0", "new-commit", "1-1", state)
-    assert containers[deploy.LIVE]["Image"] == "sha256:new"
-    assert json.loads(state.read_text()) == result
-    assert result["previous"] is None
-
-
-def test_success_preserves_previous_container_and_identity(engine, tmp_path):
-    containers, _, start = engine
-    start(deploy.LIVE, "sha256:old", "5002", "1.0.0", "old-commit")
-    result = deploy.promote("sha256:new", "1.0.1", "new-commit", "2-1", tmp_path / "state.json")
-    assert result["previous"]["image_id"] == "sha256:old"
-    assert result["previous"]["commit"] == "old-commit"
-    assert not containers[result["previous"]["container"]]["State"]["Running"]
-
-
-def test_failed_verification_restores_old_and_keeps_state(engine, tmp_path, monkeypatch):
-    containers, _, start = engine
-    start(deploy.LIVE, "sha256:old", "5002", "1.0.0", "old-commit")
+def old_state(tmp_path):
+    manifest = tmp_path / "old.json"
+    manifest.write_text("{}")
+    previous = {"manifest": str(manifest), "version": "2.0.0", "commit": "old",
+                "images": {"frontend": "sha256:front-old", "backend": "sha256:back-old"}}
     state = tmp_path / "state.json"
-    state.write_text('"previous-state"')
-    checked = []
+    state.write_text(json.dumps({"current": previous}))
+    return state, previous
 
+
+def test_initial_deployment_records_both_exact_images(engine, tmp_path):
+    state = tmp_path / "state.json"
+    result = deploy.promote(tmp_path / "new.json", IMAGES, "2.0.0", "new", state)
+    assert result["current"]["images"] == IMAGES
+    assert result["previous"] is None
+    assert json.loads(state.read_text()) == result
+    assert ("verify", IMAGES) in engine
+
+
+def test_success_preserves_previous_pair_manifest(engine, tmp_path):
+    state, previous = old_state(tmp_path)
+    result = deploy.promote(tmp_path / "new.json", IMAGES, "2.0.1", "new", state)
+    assert result["previous"] == previous
+    assert engine.index(("down", previous["manifest"])) < engine.index(("up", str(tmp_path / "new.json")))
+
+
+def test_failed_verification_restores_both_images_and_keeps_state(engine, tmp_path, monkeypatch):
+    state, previous = old_state(tmp_path)
+    original = state.read_text()
     def smoke(port, version, commit):
-        checked.append(commit)
-        if commit == "new-commit":
+        engine.append(("smoke", commit))
+        if commit == "new":
             raise ValueError("wrong live version")
-
     monkeypatch.setattr(deploy, "smoke", smoke)
     with pytest.raises(ValueError, match="wrong live version"):
-        deploy.promote("sha256:new", "1.0.1", "new-commit", "2-1", state)
-    assert containers[deploy.LIVE]["Image"] == "sha256:old"
-    assert containers[deploy.LIVE]["State"]["Running"]
-    assert checked == ["new-commit", "old-commit"]
-    assert json.loads(state.read_text()) == "previous-state"
+        deploy.promote(tmp_path / "new.json", IMAGES, "2.0.1", "new", state)
+    assert ("up", previous["manifest"]) in engine
+    assert engine[-1] == ("verify", previous["images"])
+    assert state.read_text() == original
 
 
-def test_failed_first_deployment_leaves_no_live_container(engine, tmp_path, monkeypatch):
-    containers, _, _ = engine
-    monkeypatch.setattr(deploy, "smoke", lambda *args: (_ for _ in ()).throw(ValueError("failed")))
+def test_failed_start_restores_previous_pair(engine, tmp_path, monkeypatch):
+    state, previous = old_state(tmp_path)
+    def up(file, project):
+        engine.append(("up", str(file)))
+        if str(file).endswith("new.json"):
+            raise ValueError("frontend failed")
+    monkeypatch.setattr(deploy, "up", up)
+    with pytest.raises(ValueError, match="frontend failed"):
+        deploy.promote(tmp_path / "new.json", IMAGES, "2.0.1", "new", state)
+    assert ("up", previous["manifest"]) in engine
+
+
+def test_failed_first_deployment_does_not_record_success(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "smoke", lambda *a: (_ for _ in ()).throw(ValueError("failed")))
     state = tmp_path / "state.json"
     with pytest.raises(ValueError):
-        deploy.promote("sha256:new", "1.0.0", "new-commit", "1-1", state)
-    assert deploy.LIVE not in containers
+        deploy.promote(tmp_path / "new.json", IMAGES, "2.0.0", "new", state)
     assert not state.exists()
+    assert engine[-1] == ("down", str(tmp_path / "new.json"))
 
 
-def test_unmanaged_container_is_not_replaced(engine, tmp_path):
-    containers, events, start = engine
-    start(deploy.LIVE, "sha256:other", "5002", "1.0.0", "other")
-    containers[deploy.LIVE]["Config"]["Labels"] = {}
-    events.clear()
-    with pytest.raises(ValueError, match="unmanaged"):
-        deploy.promote("sha256:new", "1.0.0", "new", "1-1", tmp_path / "state.json")
-    assert events == []
+def test_unknown_live_project_is_not_modified(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "docker", lambda *a, **k: "existing")
+    with pytest.raises(ValueError, match="without deployment state"):
+        deploy.promote(tmp_path / "new.json", IMAGES, "2.0.0", "new", tmp_path / "state.json")
+    assert engine == []
 
 
-def test_failed_candidate_never_replaces_live_container(monkeypatch, tmp_path):
-    (tmp_path / "VERSION").write_text("1.0.0\n")
+def test_legacy_live_container_requires_explicit_migration(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, "docker", lambda *a, **k: "legacy" if "name=^/release-governance-app$" in a else "")
+    with pytest.raises(ValueError, match="legacy"):
+        deploy.promote(tmp_path / "new.json", IMAGES, "2.0.0", "new", tmp_path / "state.json")
+    assert engine == []
+
+
+def test_image_mismatch_is_rejected(monkeypatch):
+    monkeypatch.setattr(deploy, "compose", lambda *a: "container")
+    monkeypatch.setattr(deploy, "docker", lambda *a: "sha256:wrong")
+    with pytest.raises(ValueError, match="tested image"):
+        deploy.verify_images("stack.json", "test", IMAGES)
+
+
+def test_candidate_failure_never_promotes(monkeypatch, tmp_path):
+    (tmp_path / "VERSION").write_text("2.0.0")
     monkeypatch.setattr(deploy, "ROOT", tmp_path)
-    for key, value in {"GITHUB_SHA": "abc", "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}.items():
-        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(deploy, "STATE", tmp_path / "state.json")
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setattr(deploy.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(deploy.subprocess, "check_output", lambda *a, **k: "abc\n")
-    monkeypatch.setattr(deploy, "show_logs", lambda name: None)
-    calls = []
-    monkeypatch.setattr(deploy, "docker", lambda *a: calls.append(a) or "sha256:new")
-    monkeypatch.setattr(deploy, "start", lambda *a, **k: None)
-    monkeypatch.setattr(deploy, "inspect_container", lambda name: {
-        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "49152"}]}}})
-
-    def fail(*args):
-        raise ValueError("candidate failed")
-
-    monkeypatch.setattr(deploy, "smoke", fail)
+    monkeypatch.setattr(deploy.subprocess, "check_output", lambda *a, **k: "selected-commit")
+    monkeypatch.setattr(deploy, "docker", lambda *a, **k: "sha256:test")
+    monkeypatch.setattr(deploy, "write_manifest", lambda path, *a: path)
+    monkeypatch.setattr(deploy, "up", lambda *a: None)
+    monkeypatch.setattr(deploy, "compose", lambda *a: "127.0.0.1:49152")
+    monkeypatch.setattr(deploy, "logs", lambda *a: None)
+    cleanup = []
+    monkeypatch.setattr(deploy, "down", lambda *a: cleanup.append(a))
+    monkeypatch.setattr(deploy, "smoke", lambda *a: (_ for _ in ()).throw(ValueError("candidate failed")))
     monkeypatch.setattr(deploy, "promote", lambda *a: pytest.fail("Must not promote failed candidate"))
     with pytest.raises(ValueError, match="candidate failed"):
         deploy.deploy()
-    assert ("rm", "--force", "release-api-candidate-1-1") in calls
-    assert not any(deploy.LIVE in command for command in calls)
+    assert cleanup[0][1] == "calfit-candidate-123-1"
 
 
-def test_failed_container_start_restores_previous(engine, tmp_path, monkeypatch):
-    containers, _, start = engine
-    start(deploy.LIVE, "sha256:old", "5002", "1.0.0", "old-commit")
+def test_manifest_pins_images_and_isolates_networks(monkeypatch, tmp_path):
+    config = {"name": "original", "networks": {"default": {"name": "original_default"}},
+              "services": {name: {"build": {"context": "/source"}, "image": "mutable-tag"} for name in IMAGES}}
+    monkeypatch.setattr(deploy, "docker", lambda *a, **k: json.dumps(config))
+    path = deploy.write_manifest(tmp_path / "stack.json", IMAGES, "5004")
+    saved = json.loads(path.read_text())
+    assert "name" not in saved
+    assert saved["networks"] == {"default": {}}
+    for service in IMAGES:
+        assert saved["services"][service]["image"] == IMAGES[service]
+        assert "build" not in saved["services"][service]
 
-    def fail(*args, **kwargs):
-        raise ValueError("port unavailable")
 
-    monkeypatch.setattr(deploy, "start", fail)
-    with pytest.raises(ValueError, match="port unavailable"):
-        deploy.promote("sha256:new", "1.0.1", "new", "2-1", tmp_path / "state.json")
-    assert containers[deploy.LIVE]["Image"] == "sha256:old"
-    assert containers[deploy.LIVE]["State"]["Running"]
-
-
-def test_deployment_uses_validated_checkout_instead_of_workflow_sha(monkeypatch, tmp_path):
-    commit = "a" * 40
-    (tmp_path / "VERSION").write_text("1.0.1\n")
-    output = tmp_path / "outputs"
+def test_builds_selected_checkout_and_records_two_images(monkeypatch, tmp_path):
+    (tmp_path / "VERSION").write_text("2.0.0")
     monkeypatch.setattr(deploy, "ROOT", tmp_path)
-    for key, value in {
-        "GITHUB_SHA": "b" * 40,
-        "GITHUB_RUN_ID": "2",
-        "GITHUB_RUN_ATTEMPT": "1",
-        "GITHUB_OUTPUT": str(output),
-    }.items():
-        monkeypatch.setenv(key, value)
-    validation_calls = []
-    monkeypatch.setattr(deploy.subprocess, "run", lambda *a, **k: validation_calls.append(a))
-    monkeypatch.setattr(deploy.subprocess, "check_output", lambda *a, **k: commit + "\n")
-    docker_calls = []
-    monkeypatch.setattr(deploy, "docker", lambda *a: docker_calls.append(a) or "sha256:tested")
-    monkeypatch.setattr(deploy, "start", lambda *a, **k: None)
-    monkeypatch.setattr(deploy, "show_logs", lambda *a: None)
-    monkeypatch.setattr(deploy, "inspect_container", lambda *a: {
-        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "49152"}]}}})
-    smoke_calls = []
-    monkeypatch.setattr(deploy, "smoke", lambda *a: smoke_calls.append(a))
+    monkeypatch.setattr(deploy, "STATE", tmp_path / "state.json")
+    monkeypatch.setenv("GITHUB_RUN_ID", "234")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_SHA", "different-workflow-sha")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    monkeypatch.setattr(deploy.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(deploy.subprocess, "check_output", lambda *a, **k: "selected-commit")
+    builds = []
+    def docker(*args, **kwargs):
+        if "build" in args:
+            builds.append(kwargs["env"])
+        if args[:2] == ("image", "inspect"):
+            return IMAGES["frontend" if "frontend" in args[2] else "backend"]
+        return ""
+    monkeypatch.setattr(deploy, "docker", docker)
+    monkeypatch.setattr(deploy, "write_manifest", lambda path, *a: path)
+    monkeypatch.setattr(deploy, "up", lambda *a: None)
+    monkeypatch.setattr(deploy, "down", lambda *a: None)
+    monkeypatch.setattr(deploy, "logs", lambda *a: None)
+    monkeypatch.setattr(deploy, "compose", lambda *a: "127.0.0.1:49152")
+    checks = []
+    monkeypatch.setattr(deploy, "smoke", lambda *a: checks.append(a))
+    monkeypatch.setattr(deploy, "verify_images", lambda *a: None)
     promotions = []
     monkeypatch.setattr(deploy, "promote", lambda *a: promotions.append(a) or {})
-
     deploy.deploy()
-
-    assert validation_calls[0][0][-1] == "--github"
-    build = next(call for call in docker_calls if call[0] == "build")
-    assert f"APP_COMMIT={commit}" in build
-    assert smoke_calls == [("49152", "1.0.1", commit)]
-    assert promotions == [("sha256:tested", "1.0.1", commit, "2-1")]
-    assert f"commit={commit}\n" in output.read_text()
+    assert builds[0]["APP_COMMIT"] == "selected-commit"
+    assert checks == [("49152", "2.0.0", "selected-commit")]
+    assert promotions[0][1] == IMAGES
+    evidence = (tmp_path / "outputs").read_text()
+    assert "frontend_image=sha256:front-new" in evidence
+    assert "backend_image=sha256:back-new" in evidence
+    assert "commit=selected-commit" in evidence

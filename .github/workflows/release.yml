@@ -93,7 +93,8 @@ jobs:
     outputs:
       version: ${{ steps.deploy.outputs.version }}
       commit: ${{ steps.deploy.outputs.commit }}
-      image_id: ${{ steps.deploy.outputs.image_id }}
+      frontend_image: ${{ steps.deploy.outputs.frontend_image }}
+      backend_image: ${{ steps.deploy.outputs.backend_image }}
       attempt: ${{ steps.deploy.outputs.attempt }}
     defaults:
       run:
@@ -128,7 +129,7 @@ jobs:
           "$RUNNER_TEMP/release-venv/bin/python" -m pip install -r requirements-dev.txt
           "$RUNNER_TEMP/release-venv/bin/python" -m pytest -q
 
-      - name: Build, smoke-test and deploy exact image
+      - name: Build, smoke-test and deploy exact image pair
         id: deploy
         env:
           RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
@@ -148,7 +149,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ needs.deploy.outputs.version }}
           RELEASE_COMMIT: ${{ needs.deploy.outputs.commit }}
-          RELEASE_IMAGE: ${{ needs.deploy.outputs.image_id }}
+          FRONTEND_IMAGE: ${{ needs.deploy.outputs.frontend_image }}
+          BACKEND_IMAGE: ${{ needs.deploy.outputs.backend_image }}
           DEPLOY_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
           RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
           CI_RUN_URL: ${{ github.event.workflow_run.html_url }}
@@ -183,7 +185,8 @@ jobs:
           body = (
               f"Verified deployment of {os.environ['RELEASE_VERSION']}.\n\n"
               f"Commit: {os.environ['RELEASE_COMMIT']}\n\n"
-              f"Docker image ID on deployment Mac: {os.environ['RELEASE_IMAGE']}\n\n"
+              f"Frontend image ID: {os.environ['FRONTEND_IMAGE']}\n\n"
+              f"Backend image ID: {os.environ['BACKEND_IMAGE']}\n\n"
               f"Workflow: {os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
               f"/actions/runs/{os.environ['GITHUB_RUN_ID']}\n"
           )

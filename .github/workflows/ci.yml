@@ -36,46 +36,25 @@ jobs:
       - name: Run application tests
         run: python -m pytest -q
 
-      - name: Build Docker image
-        id: image
+      - name: Build both images
         run: |
-          source_commit="$(git rev-parse HEAD)"
-          docker build \
-            --build-arg APP_COMMIT="$source_commit" \
-            --tag release-governance-api:ci .
-          image_id="$(docker image inspect release-governance-api:ci --format '{{.Id}}')"
-          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
-          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
-          echo "Built image $image_id from commit $source_commit"
+          echo "APP_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          APP_COMMIT="$(git rev-parse HEAD)" docker compose --project-name calfit-ci build
 
-      - name: Start temporary container
-        env:
-          IMAGE_ID: ${{ steps.image.outputs.image_id }}
-        run: |
-          docker run --detach \
-            --name calculator-ci \
-            --publish 127.0.0.1:5003:8000 \
-            "$IMAGE_ID"
+      - name: Start temporary frontend and backend
+        run: APP_PORT=5003 docker compose --project-name calfit-ci up --detach --no-build --wait --wait-timeout 90
 
-      - name: Verify running calculator
-        env:
-          EXPECTED_COMMIT: ${{ steps.image.outputs.commit }}
+      - name: Verify running application through frontend
         run: |
           python scripts/smoke_test.py \
             --base-url http://127.0.0.1:5003 \
             --expected-version "$(cat VERSION)" \
-            --expected-commit "$EXPECTED_COMMIT"
+            --expected-commit "$APP_COMMIT"
 
       - name: Show container logs
-        if: ${{ always() }}
-        run: |
-          if docker container inspect calculator-ci > /dev/null 2>&1; then
-            docker logs calculator-ci
-          fi
+        if: always()
+        run: docker compose --project-name calfit-ci logs --no-color --tail 100
 
-      - name: Remove temporary container
-        if: ${{ always() }}
-        run: |
-          if docker container inspect calculator-ci > /dev/null 2>&1; then
-            docker rm --force calculator-ci
-          fi
+      - name: Remove temporary stack
+        if: always()
+        run: docker compose --project-name calfit-ci down --remove-orphans

@@ -1,4 +1,4 @@
-"""Build, smoke-test, and deploy one exact image using Docker Desktop on macOS."""
+"""Build, verify, and deploy a pinned frontend/backend pair on Docker Desktop."""
 
 import fcntl
 import json
@@ -9,29 +9,35 @@ import sys
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
-LIVE = "release-governance-app"
+LIVE = "calfit-release"
 PORT = "5004"
-LABEL = "release-governance.managed"
-STATE = Path.home() / ".local/state/semantic_versioning_devops/deployment.json"
+STATE = Path.home() / ".local/state/semantic_versioning_devops/stack-deployment.json"
 
 
-def docker(*args):
-    result = subprocess.run(["docker", *args], text=True, capture_output=True, check=True)
+def docker(*args, env=None):
+    result = subprocess.run(["docker", *args], text=True, capture_output=True,
+                            check=True, env=env)
     return result.stdout.strip()
 
 
-def inspect_container(name):
-    names = docker("container", "ls", "--all", "--format", "{{.Names}}").splitlines()
-    return json.loads(docker("container", "inspect", name))[0] if name in names else None
+def compose(manifest, project, *args):
+    return docker("compose", "--project-name", project, "--file", str(manifest), *args)
 
 
-def show_logs(name):
-    # Log retrieval must not prevent container cleanup or recovery.
+def up(manifest, project):
+    compose(manifest, project, "up", "--detach", "--no-build", "--pull", "never",
+            "--wait", "--wait-timeout", "90")
+
+
+def down(manifest, project):
+    compose(manifest, project, "down", "--remove-orphans")
+
+
+def logs(manifest, project):
     try:
-        result = subprocess.run(["docker", "logs", name], text=True, capture_output=True)
-        print(result.stdout + result.stderr, flush=True)
-    except OSError as error:
-        print(f"Could not retrieve container logs: {error}", file=sys.stderr)
+        print(compose(manifest, project, "logs", "--no-color", "--tail", "100"), flush=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"Could not retrieve logs: {error}", file=sys.stderr)
 
 
 def smoke(port, version, commit):
@@ -42,95 +48,110 @@ def smoke(port, version, commit):
     ], check=True)
 
 
-def identity(container):
-    labels = container["Config"].get("Labels") or {}
-    if labels.get(LABEL) != "true":
-        raise ValueError(f"Existing {LIVE} is unmanaged; inspect it before proceeding.")
-    return {"image_id": container["Image"], "version": labels["release-governance.version"],
-            "commit": labels["release-governance.commit"]}
+def verify_images(manifest, project, images):
+    for service, expected in images.items():
+        container = compose(manifest, project, "ps", "--quiet", service)
+        if not container or "\n" in container:
+            raise ValueError(f"Expected exactly one running {service} container")
+        actual = docker("container", "inspect", container, "--format", "{{.Image}}")
+        if actual != expected:
+            raise ValueError(f"{service} does not use the tested image ID")
 
 
-def start(name, image, port, version, commit, restart="no"):
-    docker("run", "--detach", "--name", name, "--restart", restart,
-           "--label", f"{LABEL}=true", "--label", f"release-governance.version={version}",
-           "--label", f"release-governance.commit={commit}",
-           "--publish", f"127.0.0.1:{port}:8000", image)
+def write_manifest(path, images, port):
+    # Freeze resolved Compose settings and image IDs outside the runner checkout.
+    env = {**os.environ, "APP_PORT": str(port)}
+    config = json.loads(docker("compose", "--file", str(ROOT / "compose.yml"),
+                               "config", "--format", "json", env=env))
+    config.pop("name", None)
+    config["networks"] = {"default": {}}
+    for service, image in images.items():
+        settings = config["services"][service]
+        settings.pop("build", None)
+        settings["image"] = image
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
-def promote(image, version, commit, attempt, state_path=STATE):
-    old = inspect_container(LIVE)
-    previous = identity(old) if old else None
-    if old and not old["State"]["Running"]:
-        raise ValueError(f"Existing {LIVE} is stopped; resolve its state before deployment.")
-    backup = f"{LIVE}-backup-{attempt}"
-    moved = False
-    replacing = False
+def promote(manifest, images, version, commit, state_path=STATE):
+    previous_record = json.loads(state_path.read_text()) if state_path.exists() else None
+    previous = previous_record["current"] if previous_record else None
+    existing = docker("ps", "--all", "--quiet", "--filter", f"label=com.docker.compose.project={LIVE}")
+    if existing and not previous:
+        raise ValueError("Live Compose project exists without deployment state; inspect before retrying.")
+    legacy = docker("ps", "--quiet", "--filter", "name=^/release-governance-app$")
+    if legacy:
+        raise ValueError("Stop the legacy release-governance-app container first; see CONTAINERS.md.")
+    if previous:
+        if not Path(previous["manifest"]).is_file():
+            raise ValueError("Previous deployment manifest is missing; cannot guarantee recovery.")
+        verify_images(previous["manifest"], LIVE, previous["images"])
+    changing = False
     try:
-        if old:
-            docker("stop", LIVE)
-            docker("rename", LIVE, backup)
-            moved = True
-            previous["container"] = backup
-        replacing = True
-        start(LIVE, image, PORT, version, commit, restart="unless-stopped")
+        changing = True
+        if previous:
+            down(previous["manifest"], LIVE)
+        up(manifest, LIVE)
         smoke(PORT, version, commit)
-        actual = inspect_container(LIVE)
-        if actual["Image"] != image:
-            raise ValueError("Live container does not use the tested image ID.")
-        record = {"current": {"version": version, "commit": commit, "image_id": image,
-                              "container": LIVE}, "previous": previous,
-                  "verified_at": datetime.now(timezone.utc).isoformat()}
+        verify_images(manifest, LIVE, images)
+        record = {
+            "current": {"version": version, "commit": commit, "images": images,
+                        "manifest": str(manifest), "project": LIVE},
+            "previous": previous,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+        }
         temporary = state_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         temporary.replace(state_path)
+        return record
     except Exception:
-        # A handled failed replacement must not be reported as a successful release.
-        if replacing and inspect_container(LIVE):
-            show_logs(LIVE)
-            docker("rm", "--force", LIVE)
-        if old:
-            if moved:
-                docker("rename", backup, LIVE)
-            docker("start", LIVE)
-            smoke(PORT, previous["version"], previous["commit"])
-            print("Previous deployment restored and verified; this release still failed.", flush=True)
+        if changing:
+            logs(manifest, LIVE)
+            down(manifest, LIVE)
+            if previous:
+                up(previous["manifest"], LIVE)
+                smoke(PORT, previous["version"], previous["commit"])
+                verify_images(previous["manifest"], LIVE, previous["images"])
+                print("Previous image pair restored and verified; this release still failed.", flush=True)
         raise
-    return record
 
 
 def deploy():
-    # CLI is intended only for the authorized workflow on the Mac runner.
     subprocess.run([sys.executable, str(ROOT / "scripts/validate_release.py"), "--github"], check=True)
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    # The validator has checked this checkout against the triggering CI head SHA.
-    # GITHUB_SHA on workflow_run describes the default branch, not necessarily CI's commit.
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     attempt = f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
-    candidate = f"release-api-candidate-{attempt}"
-    image_tag = f"release-governance-api:{version}-{commit[:12]}-{attempt}"
+    tags = {service: f"calfit-{service}:{version}-{commit[:12]}-{attempt}"
+            for service in ("frontend", "backend")}
+    env = {**os.environ, "APP_COMMIT": commit,
+           "FRONTEND_IMAGE": tags["frontend"], "BACKEND_IMAGE": tags["backend"]}
     docker("info")
-    docker("build", "--build-arg", f"APP_COMMIT={commit}", "--tag", image_tag, str(ROOT))
-    image = docker("image", "inspect", image_tag, "--format", "{{.Id}}")
-    print(f"Built {image_tag}: {image}", flush=True)
+    docker("compose", "--file", str(ROOT / "compose.yml"), "build", env=env)
+    images = {service: docker("image", "inspect", tag, "--format", "{{.Id}}")
+              for service, tag in tags.items()}
+    directory = STATE.parent / "stacks" / attempt
+    directory.mkdir(parents=True, exist_ok=False)
+    candidate = write_manifest(directory / "candidate.json", images, "0")
+    project = f"calfit-candidate-{attempt}"
     try:
-        start(candidate, image, "", version, commit)
-        candidate_info = inspect_container(candidate)
-        port = candidate_info["NetworkSettings"]["Ports"]["8000/tcp"][0]["HostPort"]
+        up(candidate, project)
+        port = compose(candidate, project, "port", "frontend", "80").rsplit(":", 1)[-1]
         smoke(port, version, commit)
+        verify_images(candidate, project, images)
     finally:
-        if inspect_container(candidate):
-            show_logs(candidate)
-            docker("rm", "--force", candidate)
-    # Only an already-tested image ID reaches replacement of the live container.
-    record = promote(image, version, commit, attempt)
+        logs(candidate, project)
+        down(candidate, project)
+    manifest = write_manifest(directory / "live.json", images, PORT)
+    record = promote(manifest, images, version, commit)
     print(json.dumps(record, indent=2), flush=True)
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-        output.write(f"version={version}\ncommit={commit}\nimage_id={image}\nattempt={os.environ['GITHUB_RUN_ATTEMPT']}\n")
+        output.write(f"version={version}\ncommit={commit}\n")
+        output.write(f"frontend_image={images['frontend']}\nbackend_image={images['backend']}\n")
+        output.write(f"attempt={os.environ['GITHUB_RUN_ATTEMPT']}\n")
 
 
 def main():
     try:
-        # Keep state outside the runner checkout and the developer's working tree.
         STATE.parent.mkdir(parents=True, exist_ok=True)
         with (STATE.parent / "deploy.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

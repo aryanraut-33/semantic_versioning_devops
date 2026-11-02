@@ -1,3 +1,5 @@
+> Container architecture update: use [CONTAINERS.md](CONTAINERS.md) for current two-container setup, verification, deployment, and recovery. Single-container commands and image/state descriptions below are historical and superseded.
+
 # Release policy
 
 ## Version rules
