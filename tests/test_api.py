@@ -7,17 +7,9 @@ import pytest
 from app import create_app
 
 
-def test_homepage_returns_calculator_form(client):
-    response = client.get("/")
-
-    assert response.status_code == 200
-    assert response.mimetype == "text/html"
-    page = response.get_data(as_text=True)
-    assert "<h1>Arithmetic Calculator</h1>" in page
-    assert 'name="a"' in page and 'name="b"' in page
-    assert 'name="format" value="html"' in page
-    for endpoint in ("add", "subtract", "multiply", "divide"):
-        assert f'formaction="/{endpoint}"' in page
+@pytest.mark.parametrize("path", ["/", "/calories-bmi", "/bmi", "/behind-the-numbers", "/assets/app.js"])
+def test_backend_does_not_serve_frontend(client, path):
+    assert client.get(path).status_code == 404
 
 
 def test_health_returns_ok(client):
@@ -71,7 +63,13 @@ def test_unknown_path_returns_not_found(client):
 
 
 @pytest.mark.parametrize(
-    "endpoint", ["/", "/add", "/subtract", "/multiply", "/divide", "/health", "/version"]
+    "endpoint", ["/health", "/version"]
 )
 def test_post_is_not_allowed(client, endpoint):
     assert client.post(endpoint, json={}).status_code == 405
+
+
+@pytest.mark.parametrize("endpoint", ["/add", "/subtract", "/multiply", "/divide"])
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_removed_arithmetic_routes_return_not_found(client, endpoint, method):
+    assert getattr(client, method)(endpoint).status_code == 404

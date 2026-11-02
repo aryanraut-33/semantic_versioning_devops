@@ -6,6 +6,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+node_modules/
 
 # Test output (introduced in Sprint 2)
 .pytest_cache/
@@ -24,6 +25,8 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+reports
 
 PROJECT_PLAN.md
 SPRINT_2.md

@@ -2,16 +2,21 @@
 
 import argparse
 import json
+import re
 import sys
 import time
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
-def check_response(base_url, endpoint, expected, expected_status=200):
+def check_response(base_url, endpoint, expected, expected_status=200, payload=None):
     """Check required fields while allowing compatible additional fields."""
     try:
-        response = urlopen(f"{base_url.rstrip('/')}{endpoint}", timeout=2)
+        url = f"{base_url.rstrip('/')}{endpoint}"
+        target = url if payload is None else Request(
+            url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}
+        )
+        response = urlopen(target, timeout=2)
     except HTTPError as error:
         response = error
     with response:
@@ -37,6 +42,18 @@ def check_html(base_url, endpoint, expected_text):
         page = response.read().decode("utf-8")
     if expected_text not in page:
         raise ValueError(f"{endpoint}: expected HTML containing {expected_text!r}")
+    return page
+
+
+def check_frontend(base_url):
+    page = check_html(base_url, "/", '<div id="root"></div>')
+    assets = re.findall(r'(?:src|href)="(/assets/[^"<>]+)"', page)
+    if not any(asset.endswith(".js") for asset in assets):
+        raise ValueError("Frontend has no built JavaScript bundle")
+    for asset in assets:
+        with urlopen(f"{base_url.rstrip('/')}{asset}", timeout=2) as response:
+            if response.status != 200 or response.headers.get_content_type() == "text/html" or not response.read():
+                raise ValueError(f"Missing or invalid frontend asset: {asset}")
 
 
 def wait_for_health(base_url):
@@ -63,17 +80,32 @@ def main():
 
     try:
         wait_for_health(args.base_url)
-        check_html(args.base_url, "/", "<h1>Arithmetic Calculator</h1>")
-        for operation, result in [("add", 8), ("subtract", 4), ("multiply", 12), ("divide", 3)]:
-            check_response(
-                args.base_url,
-                f"/{operation}?a=6&b=2",
-                {"operation": operation, "a": 6, "b": 2, "result": result},
-            )
-        check_response(
-            args.base_url, "/divide?a=6&b=0", {"error": "Cannot divide by zero."}, expected_status=400
-        )
-        check_html(args.base_url, "/add?a=6&b=2&format=html", '<output id="result">8.0</output>')
+        check_frontend(args.base_url)
+        check_response(args.base_url, "/frontend-version.json",
+                       {"version": args.expected_version, "commit": args.expected_commit})
+        check_response(args.base_url, "/api/activities", {})
+        for removed in ("/add", "/subtract", "/multiply", "/divide", "/does-not-exist"):
+            try:
+                with urlopen(f"{args.base_url.rstrip('/')}{removed}", timeout=2) as response:
+                    raise ValueError(f"{removed}: expected HTTP 404, got {response.status}")
+            except HTTPError as error:
+                if error.code != 404:
+                    raise ValueError(f"{removed}: expected HTTP 404, got {error.code}") from error
+        for path in ("/calories-bmi", "/bmi", "/calories-bmi/results", "/bmi/results", "/behind-the-numbers"):
+            check_html(args.base_url, path, '<div id="root"></div>')
+        fitness_input = {"units": "metric", "age": 30, "weight": 80,
+                         "height": 180, "sex": "male", "activity": "moderate"}
+        check_response(args.base_url, "/api/fitness", {
+            "bmi": {"value": 24.69, "category": "Healthy weight"},
+            "calories": {"resting_kcal": 1780, "maintenance_kcal": 2759,
+                         "activity": "moderate", "activity_factor": 1.55,
+                         "formula": "Mifflin–St Jeor"},
+        }, payload=fitness_input)
+        check_response(args.base_url, "/api/bmi", {
+            "bmi": {"value": 24.69, "category": "Healthy weight"},
+        }, payload={"units": "us", "age": 30, "weight": 80 / 0.45359237, "height": 180 / 2.54})
+        check_response(args.base_url, "/api/calories", {"field": "age"},
+                       expected_status=400, payload={**fitness_input, "age": 10})
         check_response(
             args.base_url,
             "/version",
@@ -84,7 +116,7 @@ def main():
         return 1
 
     print(
-        f"PASS: calculator UI, arithmetic, input error, health, version {args.expected_version}, "
+        f"PASS: frontend assets, fitness estimates, input errors, health, version {args.expected_version}, "
         f"and commit {args.expected_commit} verified at {args.base_url}"
     )
     return 0

@@ -1,77 +1,169 @@
-# Calculator API Contract
+# Fitness API Contract — 2.0.0
 
-Initial application version: `1.0.0`.
+Local container URL: `http://127.0.0.1:5005`. Release deployment: `http://127.0.0.1:5004`. In development Vite serves pages on 5173 and Flask serves APIs on 5001. JSON field order is not significant. No authentication is required for calculator endpoints. Release authorization is a separate pipeline concern.
 
-This document defines the public behavior used for tests and future semantic version decisions. Local examples use `http://127.0.0.1:5001`.
+## Routes
 
-## Endpoints
-
-All endpoints accept `GET`. Successful responses return HTTP `200`. The entrypoint is HTML; operation endpoints return JSON by default. No authentication or request body is required. JSON field order is not significant.
-
-| Endpoint | Required fields | Meaning |
+| Method | Path | Response / purpose |
 |---|---|---|
-| `/` | HTML calculator form | Entry page with two inputs and four operation buttons |
-| `/add?a=8&b=2` | `operation`, `a`, `b`, `result` | A + B; example result `10.0` |
-| `/subtract?a=8&b=2` | `operation`, `a`, `b`, `result` | A - B; example result `6.0` |
-| `/multiply?a=8&b=2` | `operation`, `a`, `b`, `result` | A × B; example result `16.0` |
-| `/divide?a=8&b=2` | `operation`, `a`, `b`, `result` | A ÷ B; example result `4.0` |
-| `/health` | `status`: string with value `ok` | Confirms that the application can serve a request |
-| `/version` | `version`: string; `commit`: string | Identifies the version and supplied source commit |
+| GET | `/` | HTML shell for the React fitness calculator |
+| GET | `/assets/<filename>` | Built JavaScript/CSS assets; missing assets return 404 |
+| GET | `/api/activities` | Supported activity IDs, labels, and multipliers |
+| POST | `/api/fitness` | Combined calorie and BMI results |
+| POST | `/api/calories` | Calorie results without BMI |
+| POST | `/api/bmi` | BMI results without calories |
+| GET | `/health` | `{"status":"ok"}` |
+| GET | `/frontend-version.json` | Frontend image version and commit, generated at build time |
+| GET | `/version` | `{"version":"2.0.0","commit":"unknown"}` in an unconfigured local run |
 
-## Arithmetic requests and responses
+Successful requests return HTTP 200. Nginx serves the built frontend; Flask no longer serves HTML or assets. Direct requests to Flask page paths return 404. Unknown routes return 404; unsupported methods return 405. Flask supplies standard HEAD handling for GET routes and OPTIONS handling.
 
-Supply exactly one `a` and one `b` query parameter. Both must parse as finite numbers. Negative numbers, zero, decimals, and scientific notation are supported. Subtraction and division preserve operand order. Calculations use Python floating-point arithmetic, so decimal results may be approximate.
+## Fitness request schema
 
-Operation responses use `application/json`: `operation` is the endpoint name as a string, and `a`, `b`, and `result` are JSON numbers. For example, `/add?a=8&b=2` returns:
+Send `Content-Type: application/json` and one JSON object. Requests are limited to 16 KiB. Numeric fields must be actual finite JSON numbers, not strings, booleans, NaN, or infinity. No extra fields are accepted.
 
-```json
-{"operation": "add", "a": 8.0, "b": 2.0, "result": 10.0}
-```
+| Field | Type / allowed values | Required by |
+|---|---|---|
+| `units` | String: `metric` or `us` | All fitness POST routes |
+| `age` | Whole-number age, 20–100 inclusive | All fitness POST routes |
+| `weight` | Number: kg for metric; lb for US | All fitness POST routes |
+| `height` | Number: cm for metric; **total inches** for US | All fitness POST routes |
+| `sex` | String: `male` or `female`, selecting the equation coefficient | `/api/fitness`, `/api/calories` |
+| `activity` | String: one of the IDs below | `/api/fitness`, `/api/calories` |
 
-Invalid requests return HTTP `400` with an `error` string and no result. This includes missing, duplicate, blank, or nonnumeric operands; non-finite inputs such as `NaN` or infinity; division by zero (including negative zero); and results outside the finite floating-point range. For example, `/divide?a=8&b=0` returns:
+After conversion, height must be 100–250 cm and weight 30–350 kg, inclusive. These are application limits, not definitions of healthy measurements. Age is required for BMI to enforce the adult-only scope; it does not enter the BMI equation. Do not send `sex` or `activity` to `/api/bmi`.
 
-```json
-{"error": "Cannot divide by zero."}
-```
-
-## HTML interface
-
-`/` returns `text/html` with a single form, labeled inputs A and B, and four submit buttons. The form uses standard GET submission and needs no JavaScript or CSS. Each button submits to its corresponding operation endpoint with a hidden `format=html` parameter.
-
-When `format=html` is present, an operation returns the calculator page with the result (HTTP `200`) or validation message (HTTP `400`). The inputs remain populated. Other requests use JSON. The initial page and error pages do not show a result; a successful zero result is displayed normally.
-
-This replaces the prototype's JSON welcome response at `/` while preparing the initial application. If that earlier contract has already been released, replacing its response format is a breaking change and requires a major release under the project's policy.
-
-## Health and version
-
-`/health` and `/version` continue to return `application/json` without query parameters:
+### Metric request
 
 ```json
-{"status": "ok"}
+{"units":"metric","age":30,"weight":80,"height":180,"sex":"male","activity":"moderate"}
 ```
 
+### US request
+
 ```json
-{"version": "1.0.0", "commit": "unknown"}
+{"units":"us","age":30,"weight":176.36980974790207,"height":70.86614173228347,"sex":"male","activity":"moderate"}
 ```
+
+This is approximately the same person as the metric example. For 5 ft 10 in, send `height: 70`, **not** `5.10`. The React form does that conversion for you.
+
+## Response schemas
+
+### POST `/api/fitness`
+
+The metric example returns:
+
+```json
+{
+  "measurements": {"weight_kg": 80.0, "height_cm": 180.0},
+  "bmi": {"value": 24.69, "category": "Healthy weight"},
+  "calories": {
+    "resting_kcal": 1780,
+    "maintenance_kcal": 2759,
+    "activity": "moderate",
+    "activity_factor": 1.55,
+    "formula": "Mifflin–St Jeor"
+  }
+}
+```
+
+- `measurements`: normalised kg/cm as JSON numbers, rounded to four decimal places.
+- `bmi.value`: number rounded to two decimal places; `bmi.category`: string determined from the unrounded BMI.
+- `calories.resting_kcal`: integer kcal/day.
+- `calories.maintenance_kcal`: integer kcal/day, or **null** for `resting` activity.
+- `calories.activity`: selected activity ID; `activity_factor`: number; `formula`: string.
+
+JSON numbers need not retain trailing zeroes. Do not infer category from the rounded BMI; use the returned category.
+
+### POST `/api/calories`
+
+Uses the same request as `/api/fitness`. Returns `measurements` and `calories` with the same schemas, and **no** `bmi` field.
+
+### POST `/api/bmi`
+
+Request:
+
+```json
+{"units":"metric","age":30,"weight":80,"height":180}
+```
+
+Response:
+
+```json
+{
+  "measurements": {"weight_kg": 80.0, "height_cm": 180.0},
+  "bmi": {"value": 24.69, "category": "Healthy weight"}
+}
+```
+
+No `calories` field is included. Categories are `Underweight`, `Healthy weight`, `Overweight`, and `Obesity`.
+
+### GET `/api/activities`
+
+Returns an object with an `activities` array. Each entry contains `id` (string), `label` (human-readable string), and `factor` (number). Labels may be refined without changing IDs.
+
+```json
+{
+  "activities": [
+    {"id":"resting","label":"Resting energy only","factor":1.0},
+    {"id":"sedentary","label":"Sedentary · little or no exercise","factor":1.2},
+    {"id":"light","label":"Light · exercise 1–3 days/week","factor":1.375},
+    {"id":"moderate","label":"Moderate · exercise 3–5 days/week","factor":1.55},
+    {"id":"active","label":"Very active · exercise 6–7 days/week","factor":1.725},
+    {"id":"extra_active","label":"Extra active · strenuous training or physical job","factor":1.9}
+  ]
+}
+```
+
+## Fitness errors
+
+| Status | Meaning |
+|---|---|
+| 400 | Malformed JSON, wrong shape, invalid/missing/unknown fields, or an unusable non-positive resting estimate |
+| 404 | API route not found |
+| 405 | Unsupported method |
+| 413 | Request body exceeds 16 KiB |
+| 415 | Missing/incorrect JSON content type |
+
+Fitness validation failures return an `error` string and `field` string, e.g.:
+
+```json
+{"error":"Enter a whole-number age from 20 to 100.","field":"age"}
+```
+
+`field` is the input name, or `body` for object-level errors. Framework errors under `/api/` return an `error` string without a `field`. Do not depend on exact framework error wording. Failed requests have no calculation results.
 
 ## Release identity
 
-- `version` is read from the repository's `VERSION` file at application startup.
-- `commit` is read from the `APP_COMMIT` environment variable at startup. Local development returns `unknown` when it is missing or blank.
-- For a verified demonstration, commit the source and supply the full output of `git rev-parse HEAD` as `APP_COMMIT` before starting the server.
-- The application reports the supplied value; it does not inspect Git or detect uncommitted changes. Commit changes and restart with the updated value when demonstrating another revision.
-- Restart the server after changing either release value. A missing or empty `VERSION` file prevents startup.
-- Docker builds copy `VERSION` into the image and store the `APP_COMMIT` build argument as its default environment value. Rebuild the image after changing packaged source or metadata. The demonstration runs the image without overriding that value or mounting local source over it.
-- `/health` is a basic application liveness check. Release verification also checks `/version` against the expected identity.
+`/version` reads VERSION and APP_COMMIT once at startup. Missing/blank APP_COMMIT gives `unknown`. Missing/empty VERSION prevents startup. The application reports the supplied commit; it does not inspect Git or detect uncommitted work. Restart after changing local metadata; rebuild images after changing packaged code or metadata.
 
-## Compatibility rules
+Docker copies VERSION and embeds the APP_COMMIT build argument. CI and release checks compare both values with the selected source identity. `/health` is only a liveness check; it does not assert that frontend assets exist. Smoke verification checks those separately.
 
-- Preserve supported endpoint paths, required response fields, field types, and documented behavior in compatible releases.
-- Clients should ignore additional response fields. Adding an optional field or a new endpoint can be a minor change if existing behavior stays compatible.
-- Correcting an implementation defect to match this contract can be a patch change.
-- Removing an endpoint, removing or renaming a required field, changing its type, or incompatibly changing documented behavior requires a major change.
-- Version and commit values naturally change between releases; changing those values is not itself a breaking API change.
+## Compatibility and version decision
 
-Unknown paths return HTTP `404`; unsupported methods such as `POST` on these endpoints return HTTP `405`. The bodies of these routing errors are not part of this contract. Operation validation errors follow the HTTP `400` behavior described above. Flask also supplies standard `HEAD` and `OPTIONS` handling.
+2.0.0 is major because the earlier contract explicitly promised the arithmetic HTML form at `/`; that behaviour is replaced by a JavaScript fitness interface. The former arithmetic endpoints have also been removed and return HTTP 404.
 
-Automated tests are in `tests/test_api.py` and `tests/test_calculator.py`. They cover the entry form, arithmetic examples, invalid input, HTML results and errors, and release metadata. `scripts/smoke_test.py` checks the packaged UI, all four operations, division-by-zero handling, health, and expected version and commit. Execution is pending user verification. Declared change-type validation is planned for Sprint 4.
+Preserve endpoint paths, required response fields/types, and documented semantics in compatible releases. Clients should tolerate additional response fields. New compatible capabilities can be minor; fixing an implementation to match this contract can be patch. Removing or incompatibly changing documented behaviour requires major.
+
+For equations, rounding, input limitations, and source references, see [FORMULAS.md](FORMULAS.md).
+
+## Browser navigation
+
+Browser page routes and JSON API routes are separate:
+
+| Action | Browser URL | Backend request |
+|---|---|---|
+| Home | `/` | GET page |
+| Calories + BMI | `/calories-bmi` | Calculations wait for submission |
+| BMI only | `/bmi` | Calculations wait for submission |
+| Calculate calories + BMI | `/calories-bmi/results` | POST `/api/fitness` |
+| Calculate BMI | `/bmi/results` | POST `/api/bmi` |
+| Behind the numbers | `/behind-the-numbers` | Static explanation page |
+
+Calculate navigates only after a successful API response; invalid input stays on the form. Nginx serves the React shell for every listed page route, allowing direct links and refreshes. Unknown server paths still return 404. Back/Forward updates the selected page; results are cleared on navigation and never stored in history, URLs, or browser storage. A refreshed/revisited results page asks you to calculate again. Editing details keeps the form values for the current session.
+
+Manual checks: switch both calculator modes, calculate each, open the methods page, use Back/Forward, and refresh each page. A results refresh should show the calculate-again prompt.
+
+## Container ownership
+
+Nginx owns page routes, assets, and /frontend-version.json. It proxies /api/*, /health, and /version to Flask. Requests through the frontend keep their original paths and bodies. Only the frontend port is published to the host. Backend /version and frontend /frontend-version.json must match the selected release identity. Smoke tests verify both. See CONTAINERS.md for setup and migration.
