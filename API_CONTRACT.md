@@ -167,3 +167,7 @@ Manual checks: switch both calculator modes, calculate each, open the methods pa
 ## Container ownership
 
 Nginx owns page routes, assets, and /frontend-version.json. It proxies /api/*, /health, and /version to Flask. Requests through the frontend keep their original paths and bodies. Only the frontend port is published to the host. Backend /version and frontend /frontend-version.json must match the selected release identity. Smoke tests verify both. See CONTAINERS.md for setup and migration.
+
+## Backend instance identification
+
+Every Flask response now includes an X-Instance-ID response header. In Kubernetes it is the pod name supplied by the Downward API. Without INSTANCE_ID, the local/container hostname is used. The value is diagnostic, can change after pod replacement, and is independent of version/commit. JSON bodies remain unchanged. Static frontend responses served by Nginx do not identify a backend. Kubernetes verification is documented in Phase 3 of LOAD_BALANCING.md.

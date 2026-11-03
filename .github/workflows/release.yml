@@ -68,6 +68,7 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Repeat tests for selected release commit
+        id: tests
         run: python -m pytest -q
 
       - name: Record validation outcome
@@ -81,13 +82,40 @@ jobs:
             echo "Version policy and tests passed."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Save validation decision
+        if: always()
+        env:
+          VALIDATION_RESULT: ${{ steps.release.outcome }}
+          TEST_RESULT: ${{ steps.tests.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          record = {key: os.environ.get(key) for key in ('RELEASE_COMMIT', 'GITHUB_ACTOR', 'GITHUB_TRIGGERING_ACTOR', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'VALIDATION_RESULT', 'TEST_RESULT')}
+          Path(os.environ['RUNNER_TEMP'], 'release-validation.json').write_text(json.dumps(record, indent=2))
+          PY
+
+      - name: Upload validation decision
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-validation.json
+          retention-days: 14
+
   deploy:
     name: Build, test, deploy and verify
     needs: validate
     runs-on: [self-hosted, macOS, ARM64, release-demo]
     env:
       DOCKER_CONTEXT: desktop-linux
-    timeout-minutes: 20
+      RELEASE_K6_PROFILE: ${{ vars.RELEASE_K6_PROFILE || 'smoke' }}
+      MID_VUS: ${{ vars.RELEASE_MID_VUS || '50' }}
+      MAX_VUS: ${{ vars.RELEASE_MAX_VUS || '100' }}
+      HOLD_SECONDS: ${{ vars.RELEASE_HOLD_SECONDS || '180' }}
+      COOLDOWN_SECONDS: '300'
+      THINK_SECONDS: ${{ vars.RELEASE_THINK_SECONDS || '0.1' }}
+    timeout-minutes: 60
     permissions:
       contents: read
     outputs:
@@ -116,8 +144,17 @@ jobs:
           "$MAC_PYTHON" -m venv "$RUNNER_TEMP/release-venv"
           echo "$RUNNER_TEMP/release-venv/bin" >> "$GITHUB_PATH"
 
-      - name: Check Docker Desktop
-        run: docker info
+      - name: Make local tools available
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/Applications/Docker.app/Contents/Resources/bin" >> "$GITHUB_PATH"
+
+      - name: Check local deployment tools
+        run: |
+          docker info
+          kubectl version --client
+          minikube version
+          k6 version
 
       - name: Revalidate release on the Mac
         env:
@@ -129,11 +166,21 @@ jobs:
           "$RUNNER_TEMP/release-venv/bin/python" -m pip install -r requirements-dev.txt
           "$RUNNER_TEMP/release-venv/bin/python" -m pytest -q
 
-      - name: Build, smoke-test and deploy exact image pair
+      - name: Build and verify candidate, then deploy to Kubernetes
         id: deploy
         env:
           RELEASE_OPERATOR: ${{ vars.RELEASE_OPERATOR }}
-        run: python scripts/deploy.py
+        run: python scripts/deploy_kubernetes.py
+
+      - name: Upload Kubernetes release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubernetes-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
   publish:
     name: Record verified release
@@ -143,6 +190,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Download verified Kubernetes evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: kubernetes-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-evidence
+
       - name: Create tag and GitHub release after deployment verification
         env:
           GH_TOKEN: ${{ github.token }}
@@ -161,9 +214,21 @@ jobs:
             exit 1
           fi
           if [[ "$DEPLOY_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]]; then
-            echo "Deployment evidence is from an earlier attempt. Inspect deployment and tag state before recovery; see SPRINT_5.md."
+            echo "Deployment evidence is from an earlier attempt. Inspect deployment and tag state before recovery; see Phase 7 in LOAD_BALANCING.md."
             exit 1
           fi
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path(os.environ['RUNNER_TEMP'], 'release-evidence', 'release-report.json').read_text())
+          assert report['status'] == 'verified', 'Deployment was not verified'
+          assert report['commit'] == os.environ['RELEASE_COMMIT'], 'Commit evidence mismatch'
+          assert report['version'] == os.environ['RELEASE_VERSION'], 'Version evidence mismatch'
+          assert report['run_id'] == os.environ['GITHUB_RUN_ID'], 'Workflow evidence mismatch'
+          assert report['run_attempt'] == os.environ['GITHUB_RUN_ATTEMPT'], 'Attempt evidence mismatch'
+          for role in ('frontend', 'backend'):
+              assert report['images'][role]['tag'] == os.environ[role.upper() + '_IMAGE'], 'Image evidence mismatch'
+          PY
           tag="v$RELEASE_VERSION"
           if gh api "repos/$GH_REPO/git/ref/tags/$tag" > "$RUNNER_TEMP/existing-tag.json" 2> "$RUNNER_TEMP/tag-error.txt"; then
             actual_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["object"]["sha"])' "$RUNNER_TEMP/existing-tag.json")"
@@ -185,8 +250,8 @@ jobs:
           body = (
               f"Verified deployment of {os.environ['RELEASE_VERSION']}.\n\n"
               f"Commit: {os.environ['RELEASE_COMMIT']}\n\n"
-              f"Frontend image ID: {os.environ['FRONTEND_IMAGE']}\n\n"
-              f"Backend image ID: {os.environ['BACKEND_IMAGE']}\n\n"
+              f"Frontend image tag: {os.environ['FRONTEND_IMAGE']}\n\n"
+              f"Backend image tag: {os.environ['BACKEND_IMAGE']}\n\n"
               f"Workflow: {os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
               f"/actions/runs/{os.environ['GITHUB_RUN_ID']}\n"
           )
@@ -200,4 +265,8 @@ jobs:
             gh release create "$tag" --verify-tag --title "$tag" \
               --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
+          gh release upload "$tag" \
+            "$RUNNER_TEMP/release-evidence/release-report.json" \
+            "$RUNNER_TEMP/release-evidence/k6-candidate.json" \
+            "$RUNNER_TEMP/release-evidence/k6-live.json" --clobber
           echo "Verified release: $tag ($RELEASE_COMMIT)" >> "$GITHUB_STEP_SUMMARY"
