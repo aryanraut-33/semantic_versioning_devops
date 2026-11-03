@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from urllib.request import urlopen
 
 import yaml
@@ -53,10 +54,16 @@ def get(namespace, resource):
 
 
 def digest(value):
-    match = re.search(r"sha256:[0-9a-f]{64}$", value)
+    match = re.search(r"sha256:[0-9a-f]{64}$", value) if isinstance(value, str) else None
     if not match:
         raise ValueError(f"Unrecognised runtime image identity: {value}")
     return match.group()
+
+
+def runtime_digests(status):
+    # CRI may return "repoDigests": null for locally loaded images.
+    # Keep the required image ID check; an absent optional list isn't an error.
+    return sorted({digest(value) for value in [status["id"], *(status.get("repoDigests") or [])]})
 
 
 def clean(resource):
@@ -65,7 +72,8 @@ def clean(resource):
     metadata = result["metadata"]
     for key in ("uid", "resourceVersion", "generation", "creationTimestamp", "managedFields"):
         metadata.pop(key, None)
-    metadata.get("annotations", {}).pop("kubectl.kubernetes.io/last-applied-configuration", None)
+    if metadata.get("annotations"):
+        metadata["annotations"].pop("kubectl.kubernetes.io/last-applied-configuration", None)
     if result["kind"] == "Deployment" and metadata["name"] == "calfit-backend":
         result["spec"].pop("replicas", None)
     return result
@@ -97,16 +105,16 @@ def apply(namespace, resources):
 def ready_pods(namespace, images=None):
     result = {}
     for role in ROLES:
-        pods = json.loads(kube(namespace, "get", "pods", "-l", f"app=calfit-{role}", "-o", "json"))["items"]
+        pods = json.loads(kube(namespace, "get", "pods", "-l", f"app=calfit-{role}", "-o", "json")).get("items") or []
         pods = [pod for pod in pods if not pod["metadata"].get("deletionTimestamp")]
         if len(pods) < (2 if role == "backend" else 1):
             raise ValueError(f"Not enough {role} pods")
         result[role] = []
         for pod in pods:
             if not any(c["type"] == "Ready" and c["status"] == "True"
-                       for c in pod.get("status", {}).get("conditions", [])):
+                       for c in (pod.get("status") or {}).get("conditions") or []):
                 raise ValueError(f"Pod {pod['metadata']['name']} is not ready")
-            statuses = pod["status"].get("containerStatuses", [])
+            statuses = pod["status"].get("containerStatuses") or []
             if len(statuses) != 1:
                 raise ValueError("Expected one application container per pod")
             actual = digest(statuses[0]["imageID"])
@@ -120,20 +128,24 @@ def ready_pods(namespace, images=None):
 
 def hpa_status(namespace):
     hpa = get(namespace, "hpa/calfit-backend")
-    active = {c["type"]: c["status"] for c in hpa.get("status", {}).get("conditions", [])}
-    cpu = next((m["resource"]["current"].get("averageUtilization")
-                for m in hpa.get("status", {}).get("currentMetrics", [])
-                if m.get("resource", {}).get("name") == "cpu"), None)
+    state = hpa.get("status") or {}
+    active = {c["type"]: c["status"] for c in state.get("conditions") or []}
+    cpu = None
+    for metric in state.get("currentMetrics") or []:
+        resource = metric.get("resource") or {}
+        if resource.get("name") == "cpu":
+            cpu = (resource.get("current") or {}).get("averageUtilization")
+            break
     if active.get("AbleToScale") != "True" or active.get("ScalingActive") != "True" or cpu is None:
         raise ValueError("HPA is not active with numeric CPU metrics")
-    spec = hpa["spec"]
-    targets = [metric.get("resource", {}).get("target", {}).get("averageUtilization")
-               for metric in spec.get("metrics", []) if metric.get("resource", {}).get("name") == "cpu"]
+    spec = hpa.get("spec") or {}
+    targets = [(metric["resource"].get("target") or {}).get("averageUtilization")
+               for metric in spec.get("metrics") or [] if (metric.get("resource") or {}).get("name") == "cpu"]
     if (spec.get("minReplicas"), spec.get("maxReplicas"), targets,
         spec.get("scaleTargetRef", {}).get("name")) != (2, 4, [60], "calfit-backend"):
         raise ValueError("HPA does not match the release policy: calfit-backend, 2–4 replicas, 60% CPU")
-    return {"cpu_percent": cpu, "desired": hpa["status"].get("desiredReplicas"),
-            "current": hpa["status"].get("currentReplicas"), "spec": hpa["spec"]}
+    return {"cpu_percent": cpu, "desired": state.get("desiredReplicas"),
+            "current": state.get("currentReplicas"), "spec": spec}
 
 
 def wait_ready(namespace, images=None):
@@ -259,7 +271,7 @@ def snapshot():
     if len(items) != 5:
         raise ValueError("Existing calfit deployment is incomplete; repair before release")
     frontend = next(x for x in items if x["kind"] == "Deployment" and x["metadata"]["name"] == "calfit-frontend")
-    for volume in frontend["spec"]["template"]["spec"].get("volumes", []):
+    for volume in frontend["spec"]["template"]["spec"].get("volumes") or []:
         if "configMap" in volume:
             items.append(clean(get(LIVE, "configmap/" + volume["configMap"]["name"])))
     return items
@@ -298,6 +310,7 @@ def promote(resources, previous, verify_new, verify_previous, on_failure=None):
 
 
 def deploy(report):
+    report["phase"] = "validate"
     validation = json.loads(run(sys.executable, str(ROOT / "scripts/validate_release.py"), "--github"))
     report.update(validation=validation, version=validation["version"], commit=validation["commit"])
     version, commit = report["version"], report["commit"]
@@ -317,6 +330,7 @@ def deploy(report):
                        "k6": run("k6", "version")}
     run("kubectl", "--context", CONTEXT, "get", "namespace", LIVE)
     images = {}
+    report["phase"] = "build_and_load_images"
     for role in ROLES:
         tag = f"calfit-{role}:{version}-{commit[:12]}-{attempt}"
         run("docker", "build", "--platform", "linux/arm64", "--build-arg", f"APP_COMMIT={commit}",
@@ -327,12 +341,13 @@ def deploy(report):
     run("minikube", "-p", CONTEXT, "image", "load", str(archive), timeout=600)
     for role in ROLES:
         status = json.loads(run("minikube", "-p", CONTEXT, "ssh", "--", "sudo", "crictl", "inspecti", images[role]["tag"]))["status"]
-        images[role]["runtime_digests"] = sorted({digest(x) for x in [status["id"], *status.get("repoDigests", [])]})
+        images[role]["runtime_digests"] = runtime_digests(status)
     report["images"] = images
     candidate = f"calfit-candidate-{attempt}"
     if kube(LIVE, "get", "namespace", candidate, "--ignore-not-found", "-o", "name"):
         raise ValueError("Candidate namespace already exists; inspect rather than replacing it")
     owned = False
+    report["phase"] = "candidate_verification"
     try:
         kube(LIVE, "create", "namespace", candidate)
         owned = True
@@ -348,6 +363,7 @@ def deploy(report):
         if owned:
             collect(candidate, "candidate")
             kube(LIVE, "delete", "namespace", candidate, "--wait=true", "--timeout=180s")
+    report["phase"] = "snapshot_previous_deployment"
     previous = snapshot()
     old_identity = None
     old_images = None
@@ -379,6 +395,7 @@ def deploy(report):
         report["recovery"] = "previous_configuration_restored_and_verified"
 
     report["recovery"] = "not_needed"
+    report["phase"] = "live_promotion"
     try:
         report["live"] = promote(resources, previous, verify_new, verify_previous,
                                  on_failure=lambda: collect(LIVE, "failed-live"))
@@ -388,6 +405,7 @@ def deploy(report):
             report["recovery"] = "no_previous_deployment_cleanup_attempted" if not previous else "recovery_failed_or_incomplete"
         raise
     report["status"] = "verified"
+    report["phase"] = "verified"
     report["attempt"] = os.environ["GITHUB_RUN_ATTEMPT"]
     report["finished_at"] = now()
     collect(LIVE, "live")
@@ -414,9 +432,11 @@ def main():
     except Exception as error:
         report["status"] = "failed"
         report["error"] = str(error)
+        report["traceback"] = traceback.format_exc()
         if isinstance(error, subprocess.CalledProcessError):
             report["command_error"] = error.stderr
         print(f"Kubernetes release failed: {error}", file=sys.stderr)
+        traceback.print_exc()
         return 1
     finally:
         report["finished_at"] = now()
