@@ -12,6 +12,7 @@ node_modules/
 .pytest_cache/
 .coverage
 htmlcov/
+.artifacts/
 
 # Local configuration and credentials
 .env
@@ -29,6 +30,8 @@ htmlcov/
 reports
 
 PROJECT_PLAN.md
+LOAD_BALANCING.md
+
 SPRINT_2.md
 SPRINT_3.md
 SPRINT_4.md

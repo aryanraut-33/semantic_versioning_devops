@@ -26,7 +26,7 @@ Open **http://127.0.0.1:5006/**. Docker Desktop must be running and frontend/pac
 | Two-container stack | compose.yml |
 | Tests and HTTP verification | tests/, scripts/smoke_test.py |
 | CI | .github/workflows/ci.yml |
-| Release and recovery | scripts/deploy.py, .github/workflows/release.yml |
+| Kubernetes release and recovery | scripts/deploy_kubernetes.py, .github/workflows/release.yml |
 
 ## Pages and APIs
 
@@ -53,13 +53,16 @@ Reference case: male coefficient, age 30, 80 kg, 180 cm, moderate activity → *
 
 ## Release workflow
 
-Push/open PR → CI → merge → main CI → automatic Release → verified deployment → GitHub Release. Manual dispatch remains available. Authorization and semantic version checks still apply. Both image IDs are recorded; live deployment uses port 5004. A failed candidate never replaces live services; handled promotion failures restore the previous pair when available.
+Push/open PR → CI → merge → successful main CI → authorized Release → candidate Kubernetes namespace → verified live rollout in calfit → GitHub Release with audit/k6 assets. Manual dispatch remains available.
 
-Follow the one-time migration instructions in CONTAINERS.md before the first split deployment. Earlier single-container sprint instructions are historical. Do not reuse a published version; review VERSION, release.json, CHANGELOG.md, and successful Git tags together.
+Follow **Phase 7 in [LOAD_BALANCING.md](LOAD_BALANCING.md)** for runner setup, version preparation, optional candidate autoscaling tests, snapshot recovery and evidence. Routine releases use short k6 smoke checks; full candidate scaling verification is configurable. Both images are built from the validated commit and checked against Minikube runtime identities.
+
+The workflow now deploys to Kubernetes, not Compose. Open the application with the documented frontend port-forward on 5007. Compose remains available for local development. No commands, releases or tests were executed by the assistant.
 
 ## Documentation
 
 - [Container setup](CONTAINERS.md)
+- [Kubernetes setup, load balancing, CPU autoscaling, and k6 traffic generation](LOAD_BALANCING.md)
 - [API contract](API_CONTRACT.md)
 - [Formulas and sources](FORMULAS.md)
 - [Release policy](RELEASE_POLICY.md)

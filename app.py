@@ -1,6 +1,7 @@
 """Fitness calculator used to demonstrate controlled software releases."""
 
 import os
+import socket
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -16,6 +17,12 @@ def create_app() -> Flask:
     version_file = Path(__file__).resolve().with_name("VERSION")
     app.config["APP_VERSION"] = version_file.read_text(encoding="utf-8").strip()
     app.config["APP_COMMIT"] = os.environ.get("APP_COMMIT", "").strip() or "unknown"
+    app.config["INSTANCE_ID"] = os.environ.get("INSTANCE_ID", "").strip() or socket.gethostname()
+
+    @app.after_request
+    def identify_instance(response):
+        response.headers["X-Instance-ID"] = app.config["INSTANCE_ID"]
+        return response
 
     if not app.config["APP_VERSION"]:
         raise ValueError("VERSION must contain the application version.")

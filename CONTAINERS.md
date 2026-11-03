@@ -1,3 +1,5 @@
+> Phase 7 update: the current Release workflow deploys to Minikube using scripts/deploy_kubernetes.py and publishes verification evidence. Follow [LOAD_BALANCING.md](LOAD_BALANCING.md), Phase 7. Compose deployment/recovery descriptions below are historical; Compose remains a local development option.
+
 # CalFit: two-container setup
 
 Each stack runs **two containers**: frontend (Nginx serving React) and backend (Gunicorn running Flask). Node builds React but is not a running service.

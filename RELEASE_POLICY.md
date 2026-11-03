@@ -1,3 +1,5 @@
+> Phase 7 update: the current Release workflow deploys to Minikube using scripts/deploy_kubernetes.py and publishes verification evidence. Follow [LOAD_BALANCING.md](LOAD_BALANCING.md), Phase 7. Compose deployment/recovery descriptions below are historical; Compose remains a local development option.
+
 > Container architecture update: use [CONTAINERS.md](CONTAINERS.md) for current two-container setup, verification, deployment, and recovery. Single-container commands and image/state descriptions below are historical and superseded.
 
 # Release policy
