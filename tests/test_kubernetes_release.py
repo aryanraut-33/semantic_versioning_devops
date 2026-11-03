@@ -21,6 +21,51 @@ def test_unknown_digest_is_rejected():
         deploy.digest("calfit:latest")
 
 
+@pytest.mark.parametrize("repo_digests", [None, [], ["docker.io/library/calfit@" + SHA]])
+def test_optional_runtime_repo_digests_can_be_null(repo_digests):
+    assert deploy.runtime_digests({"id": SHA, "repoDigests": repo_digests}) == [SHA]
+
+
+def test_runtime_digest_missing_optional_field():
+    assert deploy.runtime_digests({"id": SHA}) == [SHA]
+
+
+def test_null_required_image_id_still_fails():
+    with pytest.raises(ValueError, match="Unrecognised runtime image identity"):
+        deploy.runtime_digests({"id": None, "repoDigests": None})
+
+
+@pytest.mark.parametrize("status", [None, {}, {"conditions": None, "currentMetrics": None},
+    {"conditions": [{"type": "AbleToScale", "status": "True"},
+                    {"type": "ScalingActive", "status": "True"}], "currentMetrics": None}])
+def test_uninitialised_hpa_reports_retryable_metrics_error(monkeypatch, status):
+    monkeypatch.setattr(deploy, "get", lambda *a: {"status": status})
+    with pytest.raises(ValueError, match="numeric CPU"):
+        deploy.hpa_status("candidate")
+
+
+def test_wait_ready_retries_null_metrics_until_numeric_cpu_available(monkeypatch):
+    states = iter([
+        {"status": {"conditions": None, "currentMetrics": None}},
+        {"spec": {"minReplicas": 2, "maxReplicas": 4,
+                  "scaleTargetRef": {"name": "calfit-backend"},
+                  "metrics": [{"resource": {"name": "cpu", "target": {"averageUtilization": 60}}}]},
+         "status": {"conditions": [{"type": "AbleToScale", "status": "True"},
+                                    {"type": "ScalingActive", "status": "True"}],
+                    "currentMetrics": [{"resource": {"name": "cpu", "current": {"averageUtilization": 0}}}],
+                    "desiredReplicas": 2, "currentReplicas": 2}},
+    ])
+    monkeypatch.setattr(deploy, "get", lambda *a: next(states))
+    monkeypatch.setattr(deploy, "kube", lambda *a: "")
+    monkeypatch.setattr(deploy, "ready_pods", lambda *a: {"backend": []})
+    monkeypatch.setattr(deploy.time, "monotonic", lambda: 0)
+    sleeps = []
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+    result = deploy.wait_ready("candidate")
+    assert result["hpa"]["cpu_percent"] == 0
+    assert sleeps == [5]
+
+
 def test_snapshot_sanitizing_leaves_backend_scale_to_hpa():
     resource = {"kind": "Deployment", "metadata": {"name": "calfit-backend", "uid": "old",
                 "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "old"}},
